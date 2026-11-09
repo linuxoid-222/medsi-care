@@ -201,3 +201,21 @@ class TrendPointResponse(BaseModel):
     value: float
     baseline: float | None
     event_ids: list[str]
+
+
+class DemoLoadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    seed: int = Field(default=20261110, ge=0, le=2_147_483_647)
+    days: int = Field(default=21, ge=14, le=28)
+    reset: bool = True
+
+
+class DemoLoadResponse(BaseModel):
+    status: Literal["loaded"]
+    synthetic: bool
+    seed: int
+    days: int
+    observation_count: int
+    check_in_count: int
+    changed_from_day: int
