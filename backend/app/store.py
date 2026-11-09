@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.domain.monitoring import Observation, SymptomFact
+from app.domain.monitoring import MonitoringEvent, Observation, SymptomFact
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,11 +22,31 @@ class CheckInRecord:
     corrected_text: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class MonitoringEventRecord:
+    id: str
+    profile_id: str
+    event: MonitoringEvent
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRecord:
+    id: str
+    event_id: str
+    recipient_id: str
+    status: str
+    read_at: datetime | None
+    created_at: datetime
+
+
 class InMemoryStore:
     def __init__(self) -> None:
         self.observations: list[Observation] = []
         self.check_ins: list[CheckInRecord] = []
         self.symptom_facts: dict[str, list[SymptomFact]] = {}
+        self.monitoring_events: list[MonitoringEventRecord] = []
+        self.notifications: list[NotificationRecord] = []
 
     def add_observation(self, observation: Observation) -> Observation:
         self.observations.append(observation)
@@ -86,6 +106,50 @@ class InMemoryStore:
 
     def list_symptom_facts(self, check_in_id: str) -> list[SymptomFact]:
         return list(self.symptom_facts.get(check_in_id, []))
+
+    def save_monitoring_event(self, profile_id: str, event: MonitoringEvent) -> MonitoringEventRecord:
+        now = datetime.now().astimezone()
+        record = MonitoringEventRecord(
+            id=f"event-{len(self.monitoring_events) + 1:08d}",
+            profile_id=profile_id,
+            event=event,
+            created_at=now,
+        )
+        self.monitoring_events.append(record)
+        if event.status.value in {"attention", "insufficient_data"}:
+            for recipient_id in ("demo-user", "demo-caregiver"):
+                self.notifications.append(
+                    NotificationRecord(
+                        id=f"notification-{len(self.notifications) + 1:08d}",
+                        event_id=record.id,
+                        recipient_id=recipient_id,
+                        status="unread",
+                        read_at=None,
+                        created_at=now,
+                    )
+                )
+        return record
+
+    def list_monitoring_events(self, profile_id: str) -> list[MonitoringEventRecord]:
+        return [item for item in self.monitoring_events if item.profile_id == profile_id]
+
+    def list_notifications(self, recipient_id: str) -> list[NotificationRecord]:
+        return [item for item in self.notifications if item.recipient_id == recipient_id]
+
+    def mark_notification_read(self, notification_id: str, recipient_id: str) -> NotificationRecord | None:
+        for index, item in enumerate(self.notifications):
+            if item.id == notification_id and item.recipient_id == recipient_id:
+                replacement = NotificationRecord(
+                    id=item.id,
+                    event_id=item.event_id,
+                    recipient_id=item.recipient_id,
+                    status="read",
+                    read_at=datetime.now().astimezone(),
+                    created_at=item.created_at,
+                )
+                self.notifications[index] = replacement
+                return replacement
+        return None
 
 
 def build_store() -> InMemoryStore:

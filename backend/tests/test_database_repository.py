@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 
 from app.db.base import Base
 from app.db.repository import DatabaseStore
-from app.domain.monitoring import Metric, Observation, SymptomFact
+from app.domain.monitoring import Metric, MonitoringEvent, MonitoringStatus, Observation, SymptomFact
 from app.store import CheckInRecord
 
 
@@ -58,3 +58,21 @@ class DatabaseRepositoryTests(TestCase):
             )
             self.assertEqual(store.list_symptom_facts(check_in.id), facts)
             self.assertEqual(store.get_check_in("profile-demo", check_in.id).corrected_text, check_in.text)
+
+            event = MonitoringEvent(
+                status=MonitoringStatus.ATTENTION,
+                metric=Metric.SLEEP_HOURS,
+                z_score=-3.1,
+                evidence=("sleep_hours=5 hours", "baseline=8 hours"),
+                message="Обнаружено изменение.",
+                level="attention",
+                source_observation_ids=(observation.id,),
+                period_start=measured_at,
+                period_end=measured_at,
+            )
+            saved_event = store.save_monitoring_event("profile-demo", event)
+            self.assertEqual(store.list_monitoring_events("profile-demo")[0].event, event)
+            notifications = store.list_notifications("demo-caregiver")
+            self.assertEqual(len(notifications), 1)
+            marked = store.mark_notification_read(notifications[0].id, "demo-caregiver")
+            self.assertEqual(marked.status, "read")

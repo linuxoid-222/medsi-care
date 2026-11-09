@@ -67,6 +67,10 @@ class MonitoringEvent:
     evidence: tuple[str, ...]
     message: str
     algorithm_version: str = "manual-slice-v1"
+    level: str = "attention"
+    source_observation_ids: tuple[str, ...] = ()
+    period_start: datetime | None = None
+    period_end: datetime | None = None
 
 
 _UNITS: dict[Metric, str] = {

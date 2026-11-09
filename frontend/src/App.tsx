@@ -39,6 +39,24 @@ type CaregiverSummary = {
   observations: Observation[];
   check_ins: CheckIn[];
   latest_analysis: Analysis | null;
+  events: MonitoringEvent[];
+  notifications: Notification[];
+};
+
+type MonitoringEvent = {
+  id: string;
+  status: string;
+  level: string;
+  message: string;
+  evidence: string[];
+  created_at: string;
+};
+
+type Notification = {
+  id: string;
+  event_id: string;
+  status: "unread" | "read";
+  created_at: string;
 };
 
 const profileId = "profile-demo";
@@ -218,6 +236,16 @@ export function App() {
     else setError("Для анализа нужно добавить хотя бы одно измерение");
   }
 
+  async function markNotificationRead(notificationId: string) {
+    const response = await apiFetch(`/api/v1/notifications/${notificationId}/read`, { method: "POST" });
+    if (!response.ok || !caregiverSummary) return;
+    const updated = await response.json();
+    setCaregiverSummary({
+      ...caregiverSummary,
+      notifications: caregiverSummary.notifications.map((item) => item.id === updated.id ? updated : item),
+    });
+  }
+
   if (!user) {
     return (
       <main className="page login-page">
@@ -250,6 +278,10 @@ export function App() {
           {!caregiverSummary ? <p>Загрузка обзора…</p> : <>
             <h3>Последний анализ</h3>
             {caregiverSummary.latest_analysis ? <div className={`result result-${caregiverSummary.latest_analysis.status}`}><strong>{caregiverSummary.latest_analysis.message}</strong><p>{caregiverSummary.latest_analysis.evidence.join(" · ")}</p></div> : <p>Пока нет анализа.</p>}
+            <h3>События мониторинга</h3>
+            {caregiverSummary.events.length === 0 ? <p>Событий пока нет.</p> : <ul className="history">{caregiverSummary.events.map((event) => <li key={event.id}><strong>{event.level}</strong><span>{event.message} · {new Date(event.created_at).toLocaleString("ru-RU")}</span></li>)}</ul>}
+            <h3>Уведомления</h3>
+            {caregiverSummary.notifications.length === 0 ? <p>Уведомлений пока нет.</p> : <ul className="history">{caregiverSummary.notifications.map((item) => <li key={item.id}><strong>{item.status === "unread" ? "Новое" : "Прочитано"}</strong><span>{new Date(item.created_at).toLocaleString("ru-RU")}</span>{item.status === "unread" && <button type="button" onClick={() => void markNotificationRead(item.id)}>Прочитать</button>}</li>)}</ul>}
             <h3>Измерения</h3>
             <ul className="history">{caregiverSummary.observations.map((item) => <li key={item.id}><strong>{item.value} {item.unit}</strong><span>{item.metric} · {new Date(item.measured_at).toLocaleString("ru-RU")}</span></li>)}</ul>
             <h3>Записи самочувствия</h3>

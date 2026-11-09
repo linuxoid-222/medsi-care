@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -43,6 +44,8 @@ from app.schemas import (
     FactExtractionResponse,
     LoginRequest,
     LoginResponse,
+    MonitoringEventResponse,
+    NotificationResponse,
     ObservationCreate,
     ObservationResponse,
     SymptomFactResponse,
@@ -73,6 +76,59 @@ def _fact_response(fact) -> SymptomFactResponse:
         confidence=fact.confidence,
         confirmed=fact.confirmed,
     )
+
+
+def _event_response(record) -> MonitoringEventResponse:
+    event = record.event
+    return MonitoringEventResponse(
+        id=record.id,
+        profile_id=record.profile_id,
+        status=event.status,
+        level=event.level,
+        metric=event.metric,
+        z_score=event.z_score,
+        message=event.message,
+        evidence=list(event.evidence),
+        source_observation_ids=list(event.source_observation_ids),
+        period_start=event.period_start,
+        period_end=event.period_end,
+        ruleset_version=event.algorithm_version,
+        created_at=record.created_at,
+    )
+
+
+def _analysis_for_profile(profile_id: str):
+    observations = store.list_observations(profile_id)
+    if not observations:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No observations available for analysis",
+        )
+    latest = observations[-1]
+    history = [item for item in observations if item.id != latest.id]
+    relevant_history = [item for item in history if item.metric == latest.metric]
+    baseline = calculate_baseline(relevant_history, latest.metric, as_of=latest.measured_at)
+    facts = [fact for check_in in store.list_check_ins(profile_id) for fact in store.list_symptom_facts(check_in.id)]
+    event = analyze_observation(latest, baseline, symptom_facts=facts)
+    source_observation_ids = tuple(item.id for item in relevant_history + [latest])
+    period_start = min((item.measured_at for item in relevant_history), default=latest.measured_at)
+    level = "normal" if event.status.value == "no_change" else event.status.value
+    event = replace(
+        event,
+        level=level,
+        source_observation_ids=source_observation_ids,
+        period_start=period_start,
+        period_end=latest.measured_at,
+    )
+    response = AnalysisResponse(
+        status=event.status,
+        metric=event.metric,
+        z_score=event.z_score,
+        evidence=list(event.evidence),
+        message=event.message,
+        algorithm_version=event.algorithm_version,
+    )
+    return response, event
 
 
 @app.get("/api/v1/health")
@@ -329,23 +385,48 @@ def confirm_check_in_facts(
 def analyze_profile(profile_id: str, user: CurrentUser) -> AnalysisResponse:
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
-    observations = store.list_observations(profile_id)
-    if not observations:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No observations available for analysis",
+    response, event = _analysis_for_profile(profile_id)
+    store.save_monitoring_event(profile_id, event)
+    return response
+
+
+@app.get(
+    "/api/v1/profiles/{profile_id}/events",
+    response_model=list[MonitoringEventResponse],
+)
+def list_events(profile_id: str, user: CurrentUser) -> list[MonitoringEventResponse]:
+    _require_profile(profile_id)
+    require_profile_access(profile_id, user)
+    return [_event_response(record) for record in store.list_monitoring_events(profile_id)]
+
+
+@app.get("/api/v1/notifications", response_model=list[NotificationResponse])
+def list_notifications(user: CurrentUser) -> list[NotificationResponse]:
+    return [
+        NotificationResponse(
+            id=item.id,
+            event_id=item.event_id,
+            recipient_id=item.recipient_id,
+            status=item.status,
+            read_at=item.read_at,
+            created_at=item.created_at,
         )
-    latest = observations[-1]
-    history = [item for item in observations if item.id != latest.id]
-    baseline = calculate_baseline(history, latest.metric, as_of=latest.measured_at)
-    event = analyze_observation(latest, baseline)
-    return AnalysisResponse(
-        status=event.status,
-        metric=event.metric,
-        z_score=event.z_score,
-        evidence=list(event.evidence),
-        message=event.message,
-        algorithm_version=event.algorithm_version,
+        for item in store.list_notifications(user.user_id)
+    ]
+
+
+@app.post("/api/v1/notifications/{notification_id}/read", response_model=NotificationResponse)
+def mark_notification_read(notification_id: str, user: CurrentUser) -> NotificationResponse:
+    item = store.mark_notification_read(notification_id, user.user_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+    return NotificationResponse(
+        id=item.id,
+        event_id=item.event_id,
+        recipient_id=item.recipient_id,
+        status=item.status,
+        read_at=item.read_at,
+        created_at=item.created_at,
     )
 
 
@@ -360,7 +441,21 @@ def caregiver_summary(profile_id: str, user: CurrentUser) -> CaregiverSummaryRes
     require_profile_access(profile_id, user)
     observations = list_observations(profile_id, user)
     check_ins = list_check_ins(profile_id, user)
-    latest_analysis = analyze_profile(profile_id, user) if observations else None
+    latest_analysis = None
+    if observations:
+        latest_analysis, _ = _analysis_for_profile(profile_id)
+    events = [_event_response(record) for record in store.list_monitoring_events(profile_id)]
+    notifications = [
+        NotificationResponse(
+            id=item.id,
+            event_id=item.event_id,
+            recipient_id=item.recipient_id,
+            status=item.status,
+            read_at=item.read_at,
+            created_at=item.created_at,
+        )
+        for item in store.list_notifications(user.user_id)
+    ]
     return CaregiverSummaryResponse(
         profile={
             "id": PROFILE_ID,
@@ -370,4 +465,6 @@ def caregiver_summary(profile_id: str, user: CurrentUser) -> CaregiverSummaryRes
         observations=observations,
         check_ins=check_ins,
         latest_analysis=latest_analysis,
+        events=events,
+        notifications=notifications,
     )

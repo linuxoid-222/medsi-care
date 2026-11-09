@@ -2,14 +2,14 @@
 
 ## 1. Текущий этап
 
-9 ноября 2026 года: этап 2 по календарю ТЗ ещё не закрыт. Backend-вертикальный
+10 ноября 2026 года: этап 2 по календарю ТЗ ещё не закрыт. Backend-вертикальный
 срез, AI-адаптеры, RBAC и исследовательский каркас существуют; основной P0-сценарий
-пока не завершён из-за отсутствия сохраняемых событий, уведомлений, trends,
-demo-loader и safety-правил.
+пока не завершён из-за отсутствия trends, demo-loader, safety-правил и полного
+frontend extraction/confirmation flow.
 
 ## 2. Дата последнего обновления
 
-2026-11-09.
+2026-11-10.
 
 ## 3. Что реализовано
 
@@ -21,6 +21,7 @@ demo-loader и safety-правил.
 - локальный faster-whisper adapter и browser MediaRecorder;
 - подтверждение фактов с сохранением в PostgreSQL;
 - минимальный signed-token RBAC с user/caregiver и read-only summary;
+- сохраняемые monitoring_events и notifications с read/read-only API;
 - синтетический генератор и Baseline A/B/Method C;
 - 16 backend-тестов.
 
@@ -29,18 +30,18 @@ demo-loader и safety-правил.
 - `pytest -q` — 16 тестов;
 - `python -m compileall -q backend experiments`;
 - `alembic check` на PostgreSQL;
+- миграция `0003_events_notifications` на SQLite и repository round-trip;
 - frontend production build;
 - реальный PostgreSQL HTTP smoke-тест для RBAC и подтверждения фактов;
 - mock-тесты GigaChat/ASR и локальная загрузка faster-whisper base.
 
 ## 5. Что не реализовано
 
-- таблицы и API `monitoring_events`, `notifications`, `audit_events`;
+- таблица и API `audit_events`;
 - сохранение результата анализа и восстановление истории событий;
 - trends API и графики сна, активности и пульса;
 - demo-loader для 14–28 дней;
 - safety rules для потенциально экстренных жалоб;
-- полная связка подтверждённых symptom facts с monitoring endpoint;
 - frontend extraction/confirmation flow;
 - диапазоны и проверка будущих дат измерений;
 - frontend/API integration tests;
@@ -48,10 +49,8 @@ demo-loader и safety-правил.
 
 ## 6. Подтверждённые P0-проблемы
 
-- исходники не были зафиксированы в Git;
-- отсутствуют сохраняемые события и уведомления;
-- подтверждённые факты не передаются в анализ;
-- нет frontend подтверждения фактов;
+- frontend extraction/confirmation flow;
+- нет frontend полного extraction/confirmation flow;
 - нет графиков и trends;
 - нет воспроизводимого demo-loader;
 - нет аварийного safety-сценария;
@@ -71,9 +70,8 @@ demo-loader и safety-правил.
 
 ## 8. Следующая задача
 
-Зафиксировать текущий проект в Git, затем добавить `monitoring_events` и
-`notifications` с миграцией, API и тестами. После этого связать сохранённые
-факты с анализом.
+Добавить воспроизводимый demo-loader и trends API, затем закрыть safety rules и
+frontend extraction/confirmation flow.
 
 ## 9. Известные ограничения и технический долг
 
@@ -86,5 +84,5 @@ demo-loader и safety-правил.
 
 ## 10. Приблизительная инженерная оценка готовности
 
-Около **40% MVP**. Оценка не является метрикой качества и будет пересмотрена
-после сохранения событий, demo-сценария и полного пользовательского пути.
+Около **45% MVP**. Оценка не является метрикой качества и будет пересмотрена
+после demo-сценария, trends, safety и полного пользовательского пути.

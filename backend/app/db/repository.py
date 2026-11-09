@@ -8,9 +8,16 @@ from uuid import uuid4
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import CheckInModel, ObservationModel, ProfileModel, SymptomFactModel
-from app.domain.monitoring import Metric, Observation, SymptomFact
-from app.store import CheckInRecord
+from app.db.models import (
+    CheckInModel,
+    MonitoringEventModel,
+    NotificationModel,
+    ObservationModel,
+    ProfileModel,
+    SymptomFactModel,
+)
+from app.domain.monitoring import Metric, MonitoringEvent, MonitoringStatus, Observation, SymptomFact
+from app.store import CheckInRecord, MonitoringEventRecord, NotificationRecord
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -181,3 +188,108 @@ class DatabaseStore:
                 )
                 for row in rows
             ]
+
+    def save_monitoring_event(self, profile_id: str, event: MonitoringEvent) -> MonitoringEventRecord:
+        now = datetime.now(timezone.utc)
+        event_id = f"event-{uuid4().hex}"
+        with self.session_factory() as session:
+            session.add(
+                MonitoringEventModel(
+                    id=event_id,
+                    profile_id=profile_id,
+                    status=event.status.value,
+                    level=event.level,
+                    metric=event.metric.value if event.metric else None,
+                    z_score=event.z_score,
+                    message=event.message,
+                    evidence_json=list(event.evidence),
+                    source_observation_ids=list(event.source_observation_ids),
+                    period_start=event.period_start,
+                    period_end=event.period_end,
+                    ruleset_version=event.algorithm_version,
+                    created_at=now,
+                )
+            )
+            if event.status.value in {"attention", "insufficient_data"}:
+                for recipient_id in ("demo-user", "demo-caregiver"):
+                    session.add(
+                        NotificationModel(
+                            id=f"notification-{uuid4().hex}",
+                            event_id=event_id,
+                            recipient_id=recipient_id,
+                            status="unread",
+                            read_at=None,
+                            created_at=now,
+                        )
+                    )
+            session.commit()
+        return MonitoringEventRecord(event_id, profile_id, event, now)
+
+    def list_monitoring_events(self, profile_id: str) -> list[MonitoringEventRecord]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(MonitoringEventModel)
+                .where(MonitoringEventModel.profile_id == profile_id)
+                .order_by(MonitoringEventModel.created_at.desc())
+            ).all()
+            return [
+                MonitoringEventRecord(
+                    id=row.id,
+                    profile_id=row.profile_id,
+                    event=MonitoringEvent(
+                        status=MonitoringStatus(row.status),
+                        metric=Metric(row.metric) if row.metric else None,
+                        z_score=row.z_score,
+                        evidence=tuple(row.evidence_json),
+                        message=row.message,
+                        algorithm_version=row.ruleset_version,
+                        level=row.level,
+                        source_observation_ids=tuple(row.source_observation_ids),
+                        period_start=_as_utc(row.period_start) if row.period_start else None,
+                        period_end=_as_utc(row.period_end) if row.period_end else None,
+                    ),
+                    created_at=_as_utc(row.created_at),
+                )
+                for row in rows
+            ]
+
+    def list_notifications(self, recipient_id: str) -> list[NotificationRecord]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(NotificationModel)
+                .where(NotificationModel.recipient_id == recipient_id)
+                .order_by(NotificationModel.created_at.desc())
+            ).all()
+            return [
+                NotificationRecord(
+                    id=row.id,
+                    event_id=row.event_id,
+                    recipient_id=row.recipient_id,
+                    status=row.status,
+                    read_at=_as_utc(row.read_at) if row.read_at else None,
+                    created_at=_as_utc(row.created_at),
+                )
+                for row in rows
+            ]
+
+    def mark_notification_read(self, notification_id: str, recipient_id: str) -> NotificationRecord | None:
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(NotificationModel).where(
+                    NotificationModel.id == notification_id,
+                    NotificationModel.recipient_id == recipient_id,
+                )
+            )
+            if row is None:
+                return None
+            row.status = "read"
+            row.read_at = datetime.now(timezone.utc)
+            session.commit()
+            return NotificationRecord(
+                id=row.id,
+                event_id=row.event_id,
+                recipient_id=row.recipient_id,
+                status=row.status,
+                read_at=_as_utc(row.read_at),
+                created_at=_as_utc(row.created_at),
+            )

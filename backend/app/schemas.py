@@ -34,6 +34,8 @@ class CaregiverSummaryResponse(BaseModel):
     observations: list["ObservationResponse"]
     check_ins: list["CheckInResponse"]
     latest_analysis: "AnalysisResponse | None" = None
+    events: list["MonitoringEventResponse"] = []
+    notifications: list["NotificationResponse"] = []
 
 
 class ObservationCreate(BaseModel):
@@ -153,3 +155,28 @@ class AnalysisResponse(BaseModel):
     evidence: list[str]
     message: str
     algorithm_version: str
+
+
+class MonitoringEventResponse(BaseModel):
+    id: str
+    profile_id: str
+    status: MonitoringStatus
+    level: str
+    metric: Metric | None
+    z_score: float | None
+    message: str
+    evidence: list[str]
+    source_observation_ids: list[str]
+    period_start: datetime | None
+    period_end: datetime | None
+    ruleset_version: str
+    created_at: datetime
+
+
+class NotificationResponse(BaseModel):
+    id: str
+    event_id: str
+    recipient_id: str
+    status: Literal["unread", "read"]
+    read_at: datetime | None
+    created_at: datetime
