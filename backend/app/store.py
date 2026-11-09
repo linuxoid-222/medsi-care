@@ -168,6 +168,16 @@ class InMemoryStore:
                 return replacement
         return None
 
+    def reset_demo_profile(self, profile_id: str) -> None:
+        self.observations = [item for item in self.observations if item.profile_id != profile_id]
+        check_in_ids = {item.id for item in self.check_ins if item.profile_id == profile_id}
+        self.check_ins = [item for item in self.check_ins if item.profile_id != profile_id]
+        for check_in_id in check_in_ids:
+            self.symptom_facts.pop(check_in_id, None)
+        event_ids = {item.id for item in self.monitoring_events if item.profile_id == profile_id}
+        self.monitoring_events = [item for item in self.monitoring_events if item.profile_id != profile_id]
+        self.notifications = [item for item in self.notifications if item.event_id not in event_ids]
+
 
 def build_store() -> InMemoryStore:
     """Build the configured store without importing SQLAlchemy for unit tests."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
@@ -12,6 +13,7 @@ from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
 from app.auth import CurrentUser, authenticate, issue_token, require_profile_access
+from app.demo import build_demo_scenario
 from app.ai.asr import (
     ASRConfigurationError,
     ASRInputError,
@@ -42,6 +44,8 @@ from app.schemas import (
     CheckInCorrectionRequest,
     CheckInCreate,
     CheckInResponse,
+    DemoLoadRequest,
+    DemoLoadResponse,
     FactExtractionResponse,
     LoginRequest,
     LoginResponse,
@@ -136,6 +140,30 @@ def _analysis_for_profile(profile_id: str):
 @app.get("/api/v1/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "data_mode": "synthetic"}
+
+
+@app.post("/api/v1/demo/load-scenario", response_model=DemoLoadResponse)
+def load_demo_scenario(payload: DemoLoadRequest, user: CurrentUser) -> DemoLoadResponse:
+    _require_profile(user.profile_id)
+    require_profile_access(user.profile_id, user, write=True)
+    if os.getenv("MEDSI_DEMO_MODE", "true").lower() != "true":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demo mode is disabled")
+    scenario = build_demo_scenario(profile_id=user.profile_id, seed=payload.seed, days=payload.days)
+    if payload.reset:
+        store.reset_demo_profile(user.profile_id)
+    for observation in scenario.observations:
+        store.add_observation(observation)
+    for check_in in scenario.check_ins:
+        store.add_check_in(check_in)
+    return DemoLoadResponse(
+        status="loaded",
+        synthetic=True,
+        seed=scenario.seed,
+        days=scenario.days,
+        observation_count=len(scenario.observations),
+        check_in_count=len(scenario.check_ins),
+        changed_from_day=14,
+    )
 
 
 @app.post("/api/v1/auth/login", response_model=LoginResponse)

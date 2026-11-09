@@ -316,3 +316,22 @@ class DatabaseStore:
                 read_at=_as_utc(row.read_at),
                 created_at=_as_utc(row.created_at),
             )
+
+    def reset_demo_profile(self, profile_id: str) -> None:
+        from sqlalchemy import delete
+
+        with self.session_factory() as session:
+            event_ids = session.scalars(
+                select(MonitoringEventModel.id).where(MonitoringEventModel.profile_id == profile_id)
+            ).all()
+            check_in_ids = session.scalars(
+                select(CheckInModel.id).where(CheckInModel.profile_id == profile_id)
+            ).all()
+            if event_ids:
+                session.execute(delete(NotificationModel).where(NotificationModel.event_id.in_(event_ids)))
+                session.execute(delete(MonitoringEventModel).where(MonitoringEventModel.id.in_(event_ids)))
+            if check_in_ids:
+                session.execute(delete(SymptomFactModel).where(SymptomFactModel.check_in_id.in_(check_in_ids)))
+                session.execute(delete(CheckInModel).where(CheckInModel.id.in_(check_in_ids)))
+            session.execute(delete(ObservationModel).where(ObservationModel.profile_id == profile_id))
+            session.commit()

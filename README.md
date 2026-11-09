@@ -56,6 +56,28 @@ PYTHONPATH=backend:. .venv/bin/python -m pytest -q
 только для локального smoke-теста. Для демонстрации и интеграционных проверок
 используется `MEDSI_STORAGE=postgres`.
 
+## Demo-сценарий
+
+Loader доступен только при `MEDSI_DEMO_MODE=true` и требует bearer-токен
+`demo-user`. Он очищает профиль и загружает повторяемую synthetic-историю:
+21 день, 14 дней baseline и 7 дней с падением сна/активности и повышенным
+пульсом. Повторный вызов с тем же seed даёт те же идентификаторы и значения.
+
+```bash
+TOKEN=$(curl -sS -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"user_id":"demo-user","password":"demo-user"}' | \
+  .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+curl -X POST http://127.0.0.1:8000/api/v1/demo/load-scenario \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"seed":20261110,"days":21,"reset":true}'
+```
+
+Параметр `reset=true` удаляет synthetic observations, check-ins, facts, events
+и notifications профиля перед повторной загрузкой.
+
 Запуск frontend:
 
 ```bash
