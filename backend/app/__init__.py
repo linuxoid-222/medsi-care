@@ -1,0 +1,1 @@
+"""MEDSI Care backend application."""
