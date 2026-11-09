@@ -134,6 +134,29 @@ class DatabaseStore:
                 corrected_text=row.corrected_text,
             )
 
+    def update_check_in_text(
+        self, profile_id: str, check_in_id: str, corrected_text: str
+    ) -> CheckInRecord | None:
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(CheckInModel).where(
+                    CheckInModel.profile_id == profile_id,
+                    CheckInModel.id == check_in_id,
+                )
+            )
+            if row is None:
+                return None
+            row.corrected_text = corrected_text
+            session.commit()
+            return CheckInRecord(
+                id=row.id,
+                profile_id=row.profile_id,
+                text=row.text,
+                source=row.source,
+                created_at=_as_utc(row.created_at),
+                corrected_text=row.corrected_text,
+            )
+
     def confirm_check_in(
         self,
         profile_id: str,

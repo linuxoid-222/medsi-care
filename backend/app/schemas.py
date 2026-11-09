@@ -90,6 +90,20 @@ class CheckInResponse(BaseModel):
     status: Literal["awaiting_analysis", "confirmed"]
 
 
+class CheckInCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    corrected_text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("corrected_text")
+    @classmethod
+    def strip_corrected_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("corrected_text must not be blank")
+        return value
+
+
 class SymptomFactResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -39,6 +39,7 @@ from app.schemas import (
     CaregiverSummaryResponse,
     CheckInConfirmRequest,
     CheckInConfirmResponse,
+    CheckInCorrectionRequest,
     CheckInCreate,
     CheckInResponse,
     FactExtractionResponse,
@@ -247,12 +248,38 @@ def list_check_ins(profile_id: str, user: CurrentUser) -> list[CheckInResponse]:
             created_at=item.created_at,
             status=(
                 "confirmed"
-                if item.corrected_text or store.list_symptom_facts(item.id)
+                if store.list_symptom_facts(item.id)
                 else "awaiting_analysis"
             ),
         )
         for item in store.list_check_ins(profile_id)
     ]
+
+
+@app.patch(
+    "/api/v1/profiles/{profile_id}/check-ins/{check_in_id}",
+    response_model=CheckInResponse,
+)
+def correct_check_in(
+    profile_id: str,
+    check_in_id: str,
+    payload: CheckInCorrectionRequest,
+    user: CurrentUser,
+) -> CheckInResponse:
+    _require_profile(profile_id)
+    require_profile_access(profile_id, user, write=True)
+    record = store.update_check_in_text(profile_id, check_in_id, payload.corrected_text)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found")
+    return CheckInResponse(
+        id=record.id,
+        profile_id=record.profile_id,
+        text=record.text,
+        corrected_text=record.corrected_text,
+        source=record.source,
+        created_at=record.created_at,
+        status="confirmed" if store.list_symptom_facts(record.id) else "awaiting_analysis",
+    )
 
 
 @app.post(
@@ -324,7 +351,7 @@ def extract_check_in_facts(profile_id: str, check_in_id: str, user: CurrentUser)
             detail="GigaChat is not configured",
         ) from exc
     try:
-        facts = provider.extract_facts(check_in.text)
+        facts = provider.extract_facts(check_in.corrected_text or check_in.text)
     except (GigaChatRequestError, FactExtractionValidationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

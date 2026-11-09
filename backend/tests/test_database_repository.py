@@ -39,6 +39,11 @@ class DatabaseRepositoryTests(TestCase):
 
             self.assertEqual(store.list_observations("profile-demo"), [observation])
             self.assertEqual(store.list_check_ins("profile-demo"), [check_in])
+            corrected = store.update_check_in_text(
+                "profile-demo", check_in.id, "Исправленный текст о слабости"
+            )
+            self.assertEqual(corrected.corrected_text, "Исправленный текст о слабости")
+            self.assertEqual(store.list_symptom_facts(check_in.id), [])
 
             facts = [
                 SymptomFact(

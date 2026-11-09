@@ -79,6 +79,23 @@ class InMemoryStore:
             None,
         )
 
+    def update_check_in_text(
+        self, profile_id: str, check_in_id: str, corrected_text: str
+    ) -> CheckInRecord | None:
+        check_in = self.get_check_in(profile_id, check_in_id)
+        if check_in is None:
+            return None
+        replacement = CheckInRecord(
+            id=check_in.id,
+            profile_id=check_in.profile_id,
+            text=check_in.text,
+            source=check_in.source,
+            created_at=check_in.created_at,
+            corrected_text=corrected_text,
+        )
+        self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
+        return replacement
+
     def confirm_check_in(
         self,
         profile_id: str,

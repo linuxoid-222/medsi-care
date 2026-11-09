@@ -20,6 +20,15 @@ type Transcript = {
   duration_seconds: number | null;
 };
 
+type Fact = {
+  category: string;
+  polarity: "present" | "absent" | "uncertain";
+  evidence: string;
+  temporal_context?: string | null;
+  confidence?: number | null;
+  confirmed: boolean;
+};
+
 type User = {
   user_id: string;
   role: "user" | "caregiver";
@@ -80,6 +89,9 @@ export function App() {
   const [loginPassword, setLoginPassword] = useState("demo-user");
   const [loginError, setLoginError] = useState("");
   const [caregiverSummary, setCaregiverSummary] = useState<CaregiverSummary | null>(null);
+  const [activeCheckIn, setActiveCheckIn] = useState<CheckIn | null>(null);
+  const [factText, setFactText] = useState("");
+  const [facts, setFacts] = useState<Fact[]>([]);
 
   async function apiFetch(path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
@@ -153,11 +165,11 @@ export function App() {
     await loadObservations();
   }
 
-  async function saveCheckIn(valueToSave: string) {
+  async function saveCheckIn(valueToSave: string): Promise<CheckIn | null> {
     setError("");
     if (!valueToSave.trim()) {
       setError("Текст записи не должен быть пустым");
-      return;
+      return null;
     }
     const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins`, {
       method: "POST",
@@ -166,14 +178,64 @@ export function App() {
     });
     if (!response.ok) {
       setError("Не удалось сохранить запись");
-      return;
+      return null;
     }
     setText("");
+    const saved = await response.json();
+    setActiveCheckIn(saved);
+    setFactText(saved.corrected_text ?? saved.text);
+    return saved;
   }
 
   async function submitCheckIn(event: FormEvent) {
     event.preventDefault();
     await saveCheckIn(text);
+  }
+
+  async function extractFacts() {
+    if (!activeCheckIn) return;
+    setError("");
+    const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/extract`, { method: "POST" });
+    if (!response.ok) {
+      setError("Не удалось извлечь факты. Проверьте настройки GigaChat.");
+      return;
+    }
+    const payload = await response.json();
+    setFacts(payload.facts);
+  }
+
+  async function saveCorrection() {
+    if (!activeCheckIn || !factText.trim()) return;
+    const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ corrected_text: factText }),
+    });
+    if (!response.ok) {
+      setError("Не удалось сохранить исправленный текст");
+      return;
+    }
+    setActiveCheckIn(await response.json());
+  }
+
+  async function confirmFacts() {
+    if (!activeCheckIn) return;
+    const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        corrected_text: factText,
+        facts: facts.map(({ category, polarity, evidence, temporal_context, confidence }) => ({
+          category, polarity, evidence, temporal_context, confidence,
+        })),
+      }),
+    });
+    if (!response.ok) {
+      setError("Доказательство факта должно присутствовать в подтверждённом тексте");
+      return;
+    }
+    setFacts((await response.json()).facts);
+    setError("");
   }
 
   async function uploadAudio(blob: Blob) {
@@ -347,6 +409,23 @@ export function App() {
               <button type="button" onClick={() => void saveCheckIn(transcript.text)}>Сохранить транскрипт</button>
             </div>
           )}
+        </section>
+
+        <section className="card">
+          <h2>Проверка фактов</h2>
+          {!activeCheckIn ? <p>Сначала сохраните текстовую или голосовую запись.</p> : <>
+            <label>Подтверждённый текст<textarea value={factText} onChange={(event) => setFactText(event.target.value)} /></label>
+            <div className="button-row">
+              <button type="button" onClick={() => void saveCorrection()}>Сохранить исправление</button>
+              <button type="button" onClick={() => void extractFacts()}>Извлечь факты</button>
+            </div>
+            {facts.map((fact, index) => <div className="fact-row" key={`${fact.category}-${index}`}>
+              <input value={fact.category} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, category: event.target.value } : item))} />
+              <select value={fact.polarity} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, polarity: event.target.value as Fact["polarity"] } : item))}><option value="present">есть</option><option value="absent">нет</option><option value="uncertain">неясно</option></select>
+              <input value={fact.evidence} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, evidence: event.target.value } : item))} />
+            </div>)}
+            {facts.length > 0 && <button type="button" onClick={() => void confirmFacts()}>Подтвердить факты</button>}
+          </>}
         </section>
       </section>
 
