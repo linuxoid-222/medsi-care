@@ -11,6 +11,21 @@ frontend extraction/confirmation flow.
 
 2026-11-10.
 
+## 2a. Проверка текущей P0-задачи
+
+P0.2 считается завершённой в коде:
+
+- [x] миграция `0003_events_notifications`;
+- [x] persistence и round-trip тесты событий/уведомлений;
+- [x] API событий, уведомлений и `read`;
+- [x] caregiver UI для событий и уведомлений;
+- [x] анализ сохраняет событие с evidence, period, ruleset version и source IDs;
+- [x] `pytest` и frontend build проходят.
+
+Живая проверка PostgreSQL в текущем sandbox заблокирована запретом на socket
+и остановленным системным сервисом. Миграция и repository проверены на SQLite,
+а живой PostgreSQL smoke-тест этого кода выполнялся до сброса окружения.
+
 ## 3. Что реализовано
 
 - модульный монолит FastAPI + React + PostgreSQL;
