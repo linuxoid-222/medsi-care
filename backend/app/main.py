@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
 from app.auth import CurrentUser, authenticate, issue_token, require_profile_access
@@ -51,6 +51,7 @@ from app.schemas import (
     ObservationResponse,
     SymptomFactResponse,
     TranscriptionResponse,
+    TrendPointResponse,
     UserResponse,
 )
 from app.store import CheckInRecord, build_store
@@ -425,6 +426,42 @@ def list_events(profile_id: str, user: CurrentUser) -> list[MonitoringEventRespo
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
     return [_event_response(record) for record in store.list_monitoring_events(profile_id)]
+
+
+@app.get(
+    "/api/v1/profiles/{profile_id}/trends",
+    response_model=list[TrendPointResponse],
+)
+def trends(
+    profile_id: str,
+    user: CurrentUser,
+    metric: Metric = Query(Metric.SLEEP_HOURS),
+    days: int = Query(28, ge=1, le=90),
+) -> list[TrendPointResponse]:
+    _require_profile(profile_id)
+    require_profile_access(profile_id, user)
+    observations = [item for item in store.list_observations(profile_id) if item.metric == metric]
+    observations = observations[-days:]
+    event_records = store.list_monitoring_events(profile_id)
+    points: list[TrendPointResponse] = []
+    for index, observation in enumerate(observations):
+        history = observations[:index]
+        baseline = calculate_baseline(history, metric, as_of=observation.measured_at)
+        related_events = [
+            item.id
+            for item in event_records
+            if item.event.metric == metric
+            and (observation.id in item.event.source_observation_ids or item.event.period_end == observation.measured_at)
+        ]
+        points.append(
+            TrendPointResponse(
+                measured_at=observation.measured_at,
+                value=observation.value,
+                baseline=baseline.center,
+                event_ids=related_events,
+            )
+        )
+    return points
 
 
 @app.get("/api/v1/notifications", response_model=list[NotificationResponse])

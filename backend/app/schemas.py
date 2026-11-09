@@ -194,3 +194,10 @@ class NotificationResponse(BaseModel):
     status: Literal["unread", "read"]
     read_at: datetime | None
     created_at: datetime
+
+
+class TrendPointResponse(BaseModel):
+    measured_at: datetime
+    value: float
+    baseline: float | None
+    event_ids: list[str]

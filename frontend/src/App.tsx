@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Observation = {
   id: string;
@@ -12,6 +13,13 @@ type Analysis = {
   status: string;
   message: string;
   evidence: string[];
+};
+
+type TrendPoint = {
+  measured_at: string;
+  value: number;
+  baseline: number | null;
+  event_ids: string[];
 };
 
 type Transcript = {
@@ -76,6 +84,8 @@ export function App() {
   const [value, setValue] = useState("8");
   const [text, setText] = useState("");
   const [observations, setObservations] = useState<Observation[]>([]);
+  const [trendMetric, setTrendMetric] = useState("sleep_hours");
+  const [trends, setTrends] = useState<TrendPoint[]>([]);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [error, setError] = useState("");
   const [isRecording, setIsRecording] = useState(false);
@@ -129,6 +139,11 @@ export function App() {
     if (response.ok) setObservations(await response.json());
   }
 
+  async function loadTrends(metricToLoad = trendMetric) {
+    const response = await apiFetch(`/api/v1/profiles/${profileId}/trends?metric=${metricToLoad}&days=28`);
+    if (response.ok) setTrends(await response.json());
+  }
+
   useEffect(() => {
     if (!token) return;
     void apiFetch("/api/v1/me").then(async (response) => {
@@ -139,11 +154,18 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    if (user.role === "user") void loadObservations();
+    if (user.role === "user") {
+      void loadObservations();
+      void loadTrends();
+    }
     else void apiFetch(`/api/v1/caregiver/profiles/${profileId}/summary`).then(async (response) => {
       if (response.ok) setCaregiverSummary(await response.json());
     });
   }, [user]);
+
+  useEffect(() => {
+    if (user?.role === "user") void loadTrends();
+  }, [trendMetric]);
 
   async function submitObservation(event: FormEvent) {
     event.preventDefault();
@@ -434,6 +456,8 @@ export function App() {
           <h2>История измерений</h2>
           <button type="button" onClick={runAnalysis}>Запустить анализ</button>
         </div>
+        <label>График показателя<select value={trendMetric} onChange={(event) => setTrendMetric(event.target.value)}><option value="sleep_hours">Сон</option><option value="activity_minutes">Активность</option><option value="pulse_bpm">Пульс</option></select></label>
+        {trends.length > 0 && <div className="chart"><ResponsiveContainer width="100%" height={260}><LineChart data={trends.map((item) => ({ ...item, label: new Date(item.measured_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) }))}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="label" /><YAxis /><Tooltip /><Legend /><Line type="monotone" dataKey="value" name="Факт" stroke="#315fa8" strokeWidth={3} dot={false} /><Line type="monotone" dataKey="baseline" name="Baseline" stroke="#a35d31" strokeDasharray="5 5" dot={false} /></LineChart></ResponsiveContainer></div>}
         {observations.length === 0 ? <p>Пока нет измерений.</p> : (
           <ul className="history">
             {observations.map((item) => <li key={item.id}><strong>{item.value} {item.unit}</strong><span>{item.metric} · {new Date(item.measured_at).toLocaleString("ru-RU")}</span></li>)}
