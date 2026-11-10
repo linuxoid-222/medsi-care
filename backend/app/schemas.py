@@ -308,6 +308,7 @@ class DemoLoadRequest(BaseModel):
     seed: int = Field(default=20261110, ge=0, le=2_147_483_647)
     days: int = Field(default=21, ge=14, le=28)
     reset: bool = True
+    anchor_date: date | None = None
 
 
 class DemoLoadResponse(BaseModel):
@@ -315,6 +316,8 @@ class DemoLoadResponse(BaseModel):
     synthetic: bool
     seed: int
     days: int
+    anchor_date: date
+    timezone: str
     observation_count: int
     check_in_count: int
     changed_from_day: int

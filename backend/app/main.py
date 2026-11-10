@@ -160,18 +160,37 @@ def load_demo_scenario(payload: DemoLoadRequest, user: CurrentUser) -> DemoLoadR
     require_profile_access(user.profile_id, user, write=True)
     if os.getenv("MEDSI_DEMO_MODE", "true").lower() != "true":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demo mode is disabled")
-    scenario = build_demo_scenario(profile_id=user.profile_id, seed=payload.seed, days=payload.days)
+    profile_timezone = store.get_profile_timezone(user.profile_id)
+    now = datetime.now(timezone.utc)
+    today = now.astimezone(ZoneInfo(profile_timezone)).date()
+    anchor_date = payload.anchor_date or today
+    if anchor_date > today:
+        raise HTTPException(status_code=422, detail="Опорная дата позже текущего дня профиля.")
+    try:
+        scenario = build_demo_scenario(profile_id=user.profile_id, seed=payload.seed,
+                                       days=payload.days, anchor_date=anchor_date,
+                                       profile_timezone=profile_timezone)
+    except OverflowError as exc:
+        raise HTTPException(status_code=422, detail="Недопустимая опорная дата.") from exc
+    if any(item.measured_at > now for item in scenario.observations):
+        raise HTTPException(status_code=422, detail="Сценарий содержит будущие измерения.")
     if payload.reset:
         store.reset_demo_profile(user.profile_id)
+    existing_observations = {item.id for item in store.list_observations(user.profile_id)}
+    existing_check_ins = {item.id for item in store.list_check_ins(user.profile_id)}
     for observation in scenario.observations:
-        store.add_observation(observation)
+        if observation.id not in existing_observations:
+            store.add_observation(observation)
     for check_in in scenario.check_ins:
-        store.add_check_in(check_in)
+        if check_in.id not in existing_check_ins:
+            store.add_check_in(check_in)
     return DemoLoadResponse(
         status="loaded",
         synthetic=True,
         seed=scenario.seed,
         days=scenario.days,
+        anchor_date=scenario.anchor_date,
+        timezone=scenario.timezone,
         observation_count=len(scenario.observations),
         check_in_count=len(scenario.check_ins),
         changed_from_day=14,

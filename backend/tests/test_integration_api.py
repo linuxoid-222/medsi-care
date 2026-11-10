@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -56,7 +56,7 @@ class ApiIntegrationTests(TestCase):
         self.assertTrue(issue_token(authenticate("demo-user", "demo-user")))
 
         loaded = main.load_demo_scenario(
-            DemoLoadRequest(seed=20261110, days=21, reset=True), self.user
+            DemoLoadRequest(seed=20261110, days=21, reset=True, anchor_date=date(2026, 10, 21)), self.user
         )
         self.assertEqual((loaded.observation_count, loaded.check_in_count), (63, 21))
         self.assertEqual(len(main.list_observations("profile-demo", self.user)), 63)
@@ -167,7 +167,7 @@ class ApiIntegrationTests(TestCase):
                 self.user,
             )
         self.assertEqual(invalid_pressure.exception.status_code, 422)
-        # Demo dates are fixed in October: request an explicit historical snapshot.
+        # This fixture explicitly anchors its demo in October.
         analysis = main.analyze_profile(
             "profile-demo", self.user, as_of=datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
         )
@@ -185,7 +185,7 @@ class ApiIntegrationTests(TestCase):
         self.assertEqual(read.status, "read")
 
         reloaded = main.load_demo_scenario(
-            DemoLoadRequest(seed=20261110, days=21, reset=True), self.user
+            DemoLoadRequest(seed=20261110, days=21, reset=True, anchor_date=date(2026, 10, 21)), self.user
         )
         self.assertEqual(reloaded, loaded)
         self.assertEqual(main.store.list_monitoring_events("profile-demo"), [])

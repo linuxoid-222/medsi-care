@@ -1,5 +1,4 @@
 from unittest.mock import patch
-from datetime import datetime, timezone
 
 from fastapi import HTTPException
 import pytest
@@ -45,7 +44,7 @@ def test_provider_failure_preserves_manual_monitoring_and_history(monkeypatch, f
     # Monitoring and caregiver read must never invoke the LLM provider.
     with patch.object(main, "GigaChatProvider", side_effect=AssertionError("LLM called by monitoring")):
         result = main.analyze_profile(
-            "profile-demo", user, as_of=datetime(2026, 10, 21, 12, tzinfo=timezone.utc),
+            "profile-demo", user,
         )
         assert result.status.value == "attention"
         summary = main.caregiver_summary("profile-demo", caregiver)

@@ -58,10 +58,11 @@ PYTHONPATH=backend:. .venv/bin/python -m pytest -q
 
 ## Demo-сценарий
 
-Loader доступен только при `MEDSI_DEMO_MODE=true` и требует bearer-токен
-`demo-user`. Он очищает профиль и загружает повторяемую synthetic-историю:
-21 день, 14 дней baseline и 7 дней с падением сна/активности и повышенным
-пульсом. Повторный вызов с тем же seed даёт те же идентификаторы и значения.
+Loader доступен при `MEDSI_DEMO_MODE=true` владельцу профиля.
+Кнопка «Загрузить демоданные» добавляет 21 день по текущую дату профиля.
+Первые 14 дней образуют историю, следующие 7 содержат изменение.
+Ответ API включает seed, опорную дату и часовой пояс. Для точного повтора
+передайте те же `seed`, `anchor_date`, `days` и используйте тот же пояс профиля.
 
 ```bash
 TOKEN=$(curl -sS -X POST http://127.0.0.1:8000/api/v1/auth/login \
@@ -72,7 +73,7 @@ TOKEN=$(curl -sS -X POST http://127.0.0.1:8000/api/v1/auth/login \
 curl -X POST http://127.0.0.1:8000/api/v1/demo/load-scenario \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"seed":20261110,"days":21,"reset":true}'
+  -d '{"seed":20261110,"anchor_date":"2026-11-11","days":21,"reset":true}'
 ```
 
 Параметр `reset=true` удаляет synthetic observations, check-ins, facts, events
@@ -113,12 +114,11 @@ Frontend-проверки: `npm --prefix frontend test`; новые зависи
 
 Числовой monitoring после аудита F1/F5/F10 использует все метрики и дневной
 baseline предыдущих 14 дней (минимум 7 различных дней). Контракт `as_of`,
-timezone, агрегации, per-metric результаты и ограничения:
-[docs/MONITORING.md](docs/MONITORING.md). Перед запуском нужна миграция
-`.venv/bin/alembic upgrade head` до `0005_daily_monitoring`.
-Анализ по умолчанию относится к сегодняшнему локальному дню, а не к последнему
-старому измерению. Для чисел октябрьского demo требуется явный исторический
-`as_of`; это не решает ещё открытый жизненный цикл текстовых фактов F2/F3/F9.
+timezone, агрегации, per-metric результаты и ограничения описаны в
+[docs/MONITORING.md](docs/MONITORING.md). Перед запуском применить
+`.venv/bin/alembic upgrade head`. Анализ по умолчанию берёт текущий локальный
+день профиля. Для demo с исторической опорной датой указать `as_of`
+внутри последнего дня сценария.
 
 Диапазоны измерений — это технические ограничения синтетического демо, а не
 медицинские нормы: сон 0–24 часа, активность 0–1440 минут, пульс 20–250 bpm,

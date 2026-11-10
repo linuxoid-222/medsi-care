@@ -106,7 +106,7 @@ def test_http_daily_history_and_trends_do_not_depend_on_viewport(api):
 
 def test_http_demo_safety_notifications_and_reset(api):
     client, repository, _ = api
-    payload = {"seed": 20261110, "days": 21, "reset": True}
+    payload = {"seed": 20261110, "days": 21, "reset": True, "anchor_date": "2026-10-21"}
     response = client.post("/api/v1/demo/load-scenario", json=payload)
     assert response.status_code == 200
     loaded = response.json()
@@ -114,7 +114,7 @@ def test_http_demo_safety_notifications_and_reset(api):
     result = client.post("/api/v1/profiles/profile-demo/analysis", params={"as_of": "2026-10-21T12:00:00Z"}).json()
     assert result["status"] == "attention"
     assert sum(item["status"] == "attention" for item in result["analysis_details"]["metrics"]) == 3
-    # The loader's old October observations cannot pretend to be current data.
+    # An explicitly historical scenario still cannot pretend to be current data.
     today = client.post("/api/v1/profiles/profile-demo/analysis").json()
     assert today["status"] == "insufficient_data"
     assert all(item["status"] == "missing_measurement" for item in today["analysis_details"]["metrics"])
@@ -138,3 +138,43 @@ def test_http_demo_safety_notifications_and_reset(api):
     assert len(client.get("/api/v1/profiles/profile-demo/observations").json()) == 63
     assert len(client.get("/api/v1/profiles/profile-demo/check-ins").json()) == 21
     assert repository.list_symptom_facts(check["id"]) == []
+
+
+def test_demo_default_anchor_matches_profile_midnight_and_manual_input(api, monkeypatch):
+    from tests.test_fact_lifecycle import clock
+    client, repository, _ = api
+    midnight = datetime(2026, 11, 9, 21, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, "datetime", clock(midnight - timedelta(microseconds=1)))
+    first = client.post("/api/v1/demo/load-scenario", json={}).json()
+    assert first["anchor_date"] == "2026-11-09"
+
+    now = midnight + timedelta(seconds=1)
+    monkeypatch.setattr(main, "datetime", clock(now))
+    loaded = client.post("/api/v1/demo/load-scenario", json={}).json()
+    assert loaded["anchor_date"] == "2026-11-10"
+    assert loaded["timezone"] == "Europe/Moscow"
+    assert loaded["seed"] == 20261110
+    observations = repository.list_observations("profile-demo")
+    assert len(observations) == 63 and observations[-1].measured_at == midnight
+    assert max(check.created_at for check in repository.list_check_ins("profile-demo")) == midnight
+
+    # Reject a future anchor before reset can delete the existing history.
+    assert client.post("/api/v1/demo/load-scenario", json={"anchor_date": "2026-11-11"}).status_code == 422
+    assert repository.list_observations("profile-demo") == observations
+    manual = client.post("/api/v1/profiles/profile-demo/observations", json={
+        "metric": "sleep_hours", "value": 5, "unit": "hours", "measured_at": now.isoformat(),
+    })
+    assert manual.status_code == 201
+    check = client.post("/api/v1/profiles/profile-demo/check-ins", json={"text": "Сегодня я чувствую слабость"})
+    assert check.status_code == 201
+    assert client.post("/api/v1/demo/load-scenario", json={"reset": False}).json() == loaded
+    assert len(repository.list_observations("profile-demo")) == 64
+    assert len(repository.list_check_ins("profile-demo")) == 22
+    result = client.post("/api/v1/profiles/profile-demo/analysis").json()
+    assert result["status"] == "attention"
+    sleep = result["analysis_details"]["metrics"][0]
+    assert sleep["day"] == loaded["anchor_date"]
+    assert sleep["baseline"]["sample_count"] == 14
+    assert sleep["source_observation_ids"] == [manual.json()["id"]]
+    assert client.post("/api/v1/demo/load-scenario", json={"anchor_date": loaded["anchor_date"]}).json() == loaded
+    assert repository.list_observations("profile-demo") == observations

@@ -49,6 +49,7 @@ type CheckIn = {
   text: string;
   corrected_text: string | null;
   status: string;
+  source: string;
   created_at: string;
   text_revision: number;
   facts_revision: number;
@@ -104,10 +105,14 @@ export function App() {
   const [observations, setObservations] = useState<Observation[]>([]);
   const [trendMetric, setTrendMetric] = useState("sleep_hours");
   const [trends, setTrends] = useState<TrendPoint[]>([]);
+  const [demoLoad, setDemoLoad] = useState<{ anchor_date: string; timezone: string } | null>(null);
+  const [loadingDemo, setLoadingDemo] = useState(false);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [error, setError] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const transcriptSaveRef = useRef<Transcript | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -199,6 +204,29 @@ export function App() {
     if (user?.role === "user") void loadTrends();
   }, [trendMetric]);
 
+  async function loadDemo() {
+    setLoadingDemo(true);
+    setError("");
+    try {
+      const response = await apiFetch("/api/v1/demo/load-scenario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reset: false }),
+      });
+      if (!response.ok) {
+        setError(await describeApiError(response, "Не удалось загрузить демоданные"));
+        return;
+      }
+      setDemoLoad(await response.json());
+      setAnalysis(null);
+      await Promise.all([loadObservations(), loadTrends()]);
+    } catch {
+      setError("Не удалось связаться с сервером при загрузке демоданных.");
+    } finally {
+      setLoadingDemo(false);
+    }
+  }
+
   async function submitObservation(event: FormEvent) {
     event.preventDefault();
     setError("");
@@ -260,6 +288,28 @@ export function App() {
     await saveCheckIn(text);
   }
 
+  async function openLatestCheckIn() {
+    const epoch = ++requestEpoch.current;
+    try {
+      const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins`);
+      if (epoch !== requestEpoch.current) return;
+      if (!response.ok) {
+        setError(await describeApiError(response, "Не удалось загрузить записи"));
+        return;
+      }
+      const records: CheckIn[] = await response.json();
+      if (epoch !== requestEpoch.current) return;
+      const latest = records.find((record) => record.source === "manual");
+      if (!latest) {
+        setError("Сохранённых записей самочувствия пока нет.");
+        return;
+      }
+      showCheckIn(latest);
+    } catch {
+      if (epoch === requestEpoch.current) setError("Не удалось загрузить запись самочувствия.");
+    }
+  }
+
   async function refreshCheckIn(id = activeCheckIn?.id) {
     if (!id) return;
     const epoch = ++requestEpoch.current;
@@ -271,9 +321,17 @@ export function App() {
     }
     const saved: CheckIn = await response.json();
     if (epoch !== requestEpoch.current) return;
+    showCheckIn(saved);
+  }
+
+  function showCheckIn(saved: CheckIn) {
+    localStorage.setItem("medsi-care-check-in", saved.id);
     setActiveCheckIn(saved);
     setFactText(saved.corrected_text ?? saved.text);
     setFacts(saved.facts);
+    setManualEvidence("");
+    setSafetyMessage("");
+    setExtractionFallback(false);
     setReviewDirty(false);
     setError("");
   }
@@ -394,6 +452,25 @@ export function App() {
       throw new Error(payload?.detail ?? "Не удалось распознать аудио");
     }
     setTranscript(await response.json());
+    transcriptSaveRef.current = null;
+    setTranscriptSaveStatus("idle");
+  }
+
+  async function saveTranscript() {
+    if (!transcript || transcriptSaveRef.current === transcript) return;
+    transcriptSaveRef.current = transcript;
+    setTranscriptSaveStatus("saving");
+    let saved = false;
+    try {
+      saved = Boolean(await saveCheckIn(transcript.text));
+    } catch {
+      if (transcriptSaveRef.current === transcript) {
+        setError("Не удалось сохранить транскрипт. Проверьте связь и повторите попытку.");
+      }
+    }
+    if (transcriptSaveRef.current !== transcript) return;
+    if (!saved) transcriptSaveRef.current = null;
+    setTranscriptSaveStatus(saved ? "saved" : "idle");
   }
 
   async function startRecording() {
@@ -504,6 +581,8 @@ export function App() {
         <p className="eyebrow">СИНТЕТИЧЕСКИЙ ПРОТОТИП</p>
         <h1>MEDSI Care</h1>
         <p className="lead">Ручной дневник самочувствия и объяснимый анализ динамики.</p>
+        <button type="button" onClick={loadDemo} disabled={loadingDemo}>Загрузить демоданные</button>
+        {demoLoad && <p role="status">Демоданные по {demoLoad.anchor_date} ({demoLoad.timezone}).</p>}
         <button type="button" onClick={logout}>Выйти</button>
       </header>
 
@@ -541,7 +620,7 @@ export function App() {
         <section className="card voice-card">
           <h2>Голосовая запись</h2>
           <p>Аудио обрабатывается локальным faster-whisper и сначала показывается для проверки.</p>
-          <button type="button" onClick={isRecording ? stopRecording : startRecording}>
+          <button type="button" disabled={transcriptSaveStatus === "saving"} onClick={isRecording ? stopRecording : startRecording}>
             {isRecording ? "Остановить запись" : "Записать голос"}
           </button>
           {isRecording && <p className="recording-status">Идёт запись…</p>}
@@ -550,13 +629,17 @@ export function App() {
               <strong>Распознанный текст</strong>
               <p>{transcript.text}</p>
               <small>{transcript.language} · {transcript.duration_seconds ? `${transcript.duration_seconds.toFixed(1)} с` : "длительность неизвестна"}</small>
-              <button type="button" onClick={() => void saveCheckIn(transcript.text)}>Сохранить транскрипт</button>
+              <button type="button" disabled={isRecording || transcriptSaveStatus !== "idle"}
+                onClick={() => void saveTranscript()}>
+                {transcriptSaveStatus === "saved" ? "Транскрипт сохранён" : "Сохранить транскрипт"}
+              </button>
             </div>
           )}
         </section>
 
         <section className="card">
           <h2>Проверка фактов</h2>
+          <button type="button" onClick={() => void openLatestCheckIn()}>Открыть последнюю запись</button>
           {extractionFallback && <p role="status">Резервный режим: автоматическое извлечение отключено для этой попытки. При доступном сервере ручной ввод, история и числовой анализ работают без LLM.</p>}
           {!activeCheckIn ? <p>Сначала сохраните текстовую или голосовую запись.</p> : <>
             <p role="status">{textDirty ? "Текст изменён: сохраните его и повторно проверьте факты." : reviewDirty ? "Факты изменены: требуется подтверждение." : activeCheckIn.status === "confirmed" ? `Проверено: ${facts.length} фактов. Редакция ${activeCheckIn.text_revision}.` : "Ожидает проверки фактов."}</p>
