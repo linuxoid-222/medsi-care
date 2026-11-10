@@ -288,7 +288,7 @@ LLM не имеет права создавать измерения, котор
 | `profiles`          | id, user_id, display_name, age_group, timezone                             | Профиль наблюдения                           |
 | `caregiver_access`  | id, profile_id, caregiver_id, status, granted_at, revoked_at               | Разрешения доверенных лиц                    |
 | `observations`      | id, profile_id, kind, value, unit, measured_at, source, quality            | Измерения                                    |
-| `check_ins`         | id, profile_id, transcript, corrected_text, created_at                     | Ежедневное самочувствие                      |
+| `check_ins`         | id, profile_id, transcript, corrected_text, created_at, text_revision, confirmed_revision, confirmed_at                     | Ежедневное самочувствие                      |
 | `symptom_facts`     | id, check_in_id, category, polarity, confidence, evidence                  | Структурированные сведения                   |
 | `baselines`         | id, profile_id, metric, window, median, scale, sample_count, calculated_at | Базовые уровни                               |
 | `monitoring_events` | id, profile_id, status, level, evidence_json, ruleset_version, created_at  | События и объяснения                         |
@@ -466,6 +466,24 @@ Baseline: 14 предыдущих локальных дат, минимум 7 р
 доказательства относительно подтверждённого текста и сохраняет факты в
 `symptom_facts`. Повторное подтверждение заменяет набор фактов этого check-in;
 неподтверждённый ответ провайдера не записывается.
+
+После F2/F3/F9 (2026-11-10): PATCH/confirm требуют `text_revision`. Изменение
+эффективного текста повышает revision и сбрасывает прежнюю проверку/активные
+факты; сохранение того же текста не сбрасывает её. Extraction возвращает revision;
+устаревший extraction/confirm получает 409. Пустое `facts: []` сохраняется как
+проверенный результат через отдельные `confirmed_revision`/`confirmed_at`.
+GET одной записи, список и caregiver summary возвращают единый status и facts.
+
+Обычный monitoring отбирает текущие подтверждённые факты из UTC-окна
+`[as_of − 24h, as_of]` по created_at записи, с confirmed_at не позже as_of.
+Новое absent/uncertain той же категории подавляет более старое present;
+отсутствие упоминания/пустой набор не означает отрицание. Это инженерное
+правило, не медицинский норматив. Safety-события имеют отдельный жизненный цикл.
+Новые события сохраняют независимый `text_provenance` с IDs, revision, цитатой,
+category/polarity, временем и версией правил. Миграция `0006_fact_lifecycle`.
+Полный контракт, разрешение конфликтов и legacy-ограничения: `docs/FACTS.md`.
+Продуктовая комбинированная версия — `daily-multimetric-v2+facts-window-v1`;
+числовые правила и frozen research-v2 не изменяются.
 
 ### 8.3. Граница ответственности
 

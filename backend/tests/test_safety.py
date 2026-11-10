@@ -67,7 +67,7 @@ class SafetyRuleTests(TestCase):
         response = main.confirm_check_in_facts(
             "profile-demo",
             check_in.id,
-            CheckInConfirmRequest(
+            CheckInConfirmRequest(text_revision=1,
                 facts=[{
                     "category": "chest_pain",
                     "polarity": "present",

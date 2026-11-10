@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -41,6 +42,7 @@ from app.domain.monitoring import (
     expected_unit,
     validate_pressure_pair,
 )
+from app.facts import (MONITORING_RULE_VERSION, TextRevisionConflict, fact_provenance, select_current_facts)
 from app.safety import evaluate_safety
 from app.schemas import (
     AnalysisResponse,
@@ -87,6 +89,8 @@ def _fact_response(fact) -> SymptomFactResponse:
         evidence=fact.evidence,
         confidence=fact.confidence,
         confirmed=fact.confirmed,
+        id=fact.id, check_in_id=fact.check_in_id, text_revision=fact.text_revision,
+        recorded_at=fact.recorded_at, confirmed_at=fact.confirmed_at,
     )
 
 
@@ -107,6 +111,7 @@ def _event_response(record) -> MonitoringEventResponse:
         ruleset_version=event.algorithm_version,
         created_at=record.created_at,
         analysis_details=event.analysis_details,
+        text_provenance=list(event.text_provenance),
     )
 
 
@@ -124,14 +129,18 @@ def _analysis_for_profile(profile_id: str, as_of: datetime | None = None):
     observations = store.list_observations(profile_id)
     facts = [fact for check_in in store.list_check_ins(profile_id)
              for fact in store.list_symptom_facts(check_in.id)]
+    selection = select_current_facts(facts, as_of=cutoff)
     event = analyze_metrics(
         observations, as_of=cutoff,
-        profile_timezone=store.get_profile_timezone(profile_id), symptom_facts=facts,
+        profile_timezone=store.get_profile_timezone(profile_id), symptom_facts=selection.attention_facts,
     )
+    event = replace(event, algorithm_version=MONITORING_RULE_VERSION,
+                    text_provenance=selection.provenance())
     return AnalysisResponse(
         status=event.status, metric=event.metric, z_score=event.z_score,
         evidence=list(event.evidence), message=event.message,
         algorithm_version=event.algorithm_version, analysis_details=event.analysis_details,
+        text_provenance=list(event.text_provenance),
     ), event
 
 
@@ -271,66 +280,55 @@ def create_check_in(profile_id: str, payload: CheckInCreate, user: CurrentUser) 
             created_at=datetime.now(timezone.utc),
         )
     )
+    return _check_in_response(record)
+
+
+def _check_in_response(record) -> CheckInResponse:
     return CheckInResponse(
-        id=record.id,
-        profile_id=record.profile_id,
-        text=record.text,
-        corrected_text=record.corrected_text,
-        source=record.source,
-        created_at=record.created_at,
-        status="awaiting_analysis",
+        id=record.id, profile_id=record.profile_id, text=record.text,
+        corrected_text=record.corrected_text, source=record.source, created_at=record.created_at,
+        text_revision=record.text_revision, confirmed_revision=record.confirmed_revision,
+        confirmed_at=record.confirmed_at,
+        status="confirmed" if record.is_confirmed else "awaiting_analysis",
+        facts=[_fact_response(fact) for fact in store.list_symptom_facts(record.id)],
     )
 
 
-@app.get(
-    "/api/v1/profiles/{profile_id}/check-ins",
-    response_model=list[CheckInResponse],
-)
+def _revision_conflict() -> HTTPException:
+    return HTTPException(status_code=409, detail="Текст изменён. Загрузите актуальную запись и повторите проверку фактов.")
+
+
+@app.get("/api/v1/profiles/{profile_id}/check-ins", response_model=list[CheckInResponse])
 def list_check_ins(profile_id: str, user: CurrentUser) -> list[CheckInResponse]:
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
-    return [
-        CheckInResponse(
-            id=item.id,
-            profile_id=item.profile_id,
-            text=item.text,
-            corrected_text=item.corrected_text,
-            source=item.source,
-            created_at=item.created_at,
-            status=(
-                "confirmed"
-                if store.list_symptom_facts(item.id)
-                else "awaiting_analysis"
-            ),
-        )
-        for item in store.list_check_ins(profile_id)
-    ]
+    return [_check_in_response(item) for item in store.list_check_ins(profile_id)]
 
 
-@app.patch(
-    "/api/v1/profiles/{profile_id}/check-ins/{check_in_id}",
-    response_model=CheckInResponse,
-)
+@app.get("/api/v1/profiles/{profile_id}/check-ins/{check_in_id}", response_model=CheckInResponse)
+def get_check_in(profile_id: str, check_in_id: str, user: CurrentUser) -> CheckInResponse:
+    _require_profile(profile_id)
+    require_profile_access(profile_id, user)
+    record = store.get_check_in(profile_id, check_in_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    return _check_in_response(record)
+
+
+@app.patch("/api/v1/profiles/{profile_id}/check-ins/{check_in_id}", response_model=CheckInResponse)
 def correct_check_in(
-    profile_id: str,
-    check_in_id: str,
-    payload: CheckInCorrectionRequest,
-    user: CurrentUser,
+    profile_id: str, check_in_id: str, payload: CheckInCorrectionRequest, user: CurrentUser,
 ) -> CheckInResponse:
     _require_profile(profile_id)
     require_profile_access(profile_id, user, write=True)
-    record = store.update_check_in_text(profile_id, check_in_id, payload.corrected_text)
+    try:
+        record = store.update_check_in_text(profile_id, check_in_id, payload.corrected_text,
+                                          expected_revision=payload.text_revision)
+    except TextRevisionConflict as exc:
+        raise _revision_conflict() from exc
     if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found")
-    return CheckInResponse(
-        id=record.id,
-        profile_id=record.profile_id,
-        text=record.text,
-        corrected_text=record.corrected_text,
-        source=record.source,
-        created_at=record.created_at,
-        status="confirmed" if store.list_symptom_facts(record.id) else "awaiting_analysis",
-    )
+        raise HTTPException(status_code=404, detail="Check-in not found")
+    return _check_in_response(record)
 
 
 @app.post(
@@ -410,7 +408,11 @@ def extract_check_in_facts(profile_id: str, check_in_id: str, user: CurrentUser)
         ) from exc
     finally:
         provider.close()
+    current = store.get_check_in(profile_id, check_in_id)
+    if current is None or current.text_revision != check_in.text_revision:
+        raise _revision_conflict()
     return FactExtractionResponse(
+        text_revision=check_in.text_revision,
         status="awaiting_confirmation",
         provider="gigachat",
         facts=[_fact_response(fact) for fact in facts],
@@ -432,7 +434,11 @@ def confirm_check_in_facts(
     check_in = store.get_check_in(profile_id, check_in_id)
     if check_in is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found")
-    source_text = payload.corrected_text or check_in.corrected_text or check_in.text
+    source_text = check_in.corrected_text or check_in.text
+    if payload.text_revision != check_in.text_revision or (
+        payload.corrected_text is not None and payload.corrected_text != source_text
+    ):
+        raise _revision_conflict()
     try:
         facts = validate_confirmed_facts(
             source_text,
@@ -443,12 +449,16 @@ def confirm_check_in_facts(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Fact evidence must be present in the confirmed text",
         ) from exc
-    store.confirm_check_in(
-        profile_id,
-        check_in_id,
-        corrected_text=payload.corrected_text or check_in.corrected_text,
-        facts=facts,
-    )
+    try:
+        facts = store.confirm_check_in(
+            profile_id, check_in_id, corrected_text=payload.corrected_text,
+            facts=facts, expected_revision=payload.text_revision,
+        )
+    except TextRevisionConflict as exc:
+        raise _revision_conflict() from exc
+    reviewed = store.get_check_in(profile_id, check_in_id)
+    if reviewed is None or not reviewed.is_confirmed or reviewed.text_revision != payload.text_revision:
+        raise _revision_conflict()
     safety_decision = evaluate_safety(facts)
     safety_event_response = None
     if safety_decision is not None:
@@ -463,9 +473,13 @@ def confirm_check_in_facts(
             level=safety_decision.level,
             period_start=check_in.created_at,
             period_end=now,
+            text_provenance=tuple(fact_provenance(fact, rule_version=safety_decision.rule_version,
+                                                 resolution="direct_confirmation") for fact in safety_decision.facts),
         )
         safety_event_response = _event_response(store.save_monitoring_event(profile_id, safety_event))
     return CheckInConfirmResponse(
+        text_revision=payload.text_revision,
+        confirmed_at=reviewed.confirmed_at,
         status="confirmed",
         check_in_id=check_in_id,
         facts=[_fact_response(fact) for fact in facts],

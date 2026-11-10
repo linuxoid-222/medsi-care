@@ -24,6 +24,7 @@ class SafetyDecision:
     level: str
     evidence: tuple[str, ...]
     message: str
+    facts: tuple[SymptomFact, ...] = ()
 
 
 def evaluate_safety(facts: Iterable[SymptomFact]) -> SafetyDecision | None:
@@ -38,6 +39,7 @@ def evaluate_safety(facts: Iterable[SymptomFact]) -> SafetyDecision | None:
         return None
     evidence = tuple(f"{fact.category}: {fact.evidence}" for fact in confirmed)
     return SafetyDecision(
+        facts=tuple(confirmed),
         rule_version=SAFETY_RULE_VERSION,
         level="safety",
         evidence=evidence,

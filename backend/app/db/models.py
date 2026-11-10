@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -49,6 +49,9 @@ class CheckInModel(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     corrected_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    confirmed_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     profile: Mapped[ProfileModel] = relationship(back_populates="check_ins")
     symptom_facts: Mapped[list["SymptomFactModel"]] = relationship(
         back_populates="check_in", cascade="all, delete-orphan"
@@ -68,6 +71,7 @@ class SymptomFactModel(Base):
     evidence: Mapped[str] = mapped_column(String(500), nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    text_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     check_in: Mapped[CheckInModel] = relationship(back_populates="symptom_facts")
 
@@ -90,6 +94,7 @@ class MonitoringEventModel(Base):
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ruleset_version: Mapped[str] = mapped_column(String(64), nullable=False)
     analysis_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    text_provenance: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 

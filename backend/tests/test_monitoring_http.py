@@ -60,7 +60,7 @@ def test_http_multimetric_snapshot_survives_sql_roundtrip(api):
     assert response.status_code == 200
     result = response.json()
     assert result["status"] == "attention"
-    assert result["algorithm_version"] == "daily-multimetric-v2"
+    assert result["algorithm_version"] == "daily-multimetric-v2+facts-window-v1"
     metrics = {item["metric"]: item for item in result["analysis_details"]["metrics"]}
     assert metrics["sleep_hours"]["status"] == "attention"
     assert metrics["pulse_bpm"]["status"] == "no_change"
@@ -120,6 +120,7 @@ def test_http_demo_safety_notifications_and_reset(api):
     assert all(item["status"] == "missing_measurement" for item in today["analysis_details"]["metrics"])
     check = client.post("/api/v1/profiles/profile-demo/check-ins", json={"text": "У меня боль в груди"}).json()
     response = client.post(f"/api/v1/profiles/profile-demo/check-ins/{check['id']}/confirm", json={
+        "text_revision": check["text_revision"],
         "facts": [{"category": "chest_pain", "polarity": "present", "evidence": "боль в груди"}],
     })
     assert response.status_code == 200

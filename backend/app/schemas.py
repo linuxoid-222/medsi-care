@@ -105,10 +105,16 @@ class CheckInResponse(BaseModel):
     source: str
     created_at: datetime
     status: Literal["awaiting_analysis", "confirmed"]
+    text_revision: int
+    confirmed_revision: int | None = None
+    confirmed_at: datetime | None = None
+    facts: list["SymptomFactResponse"] = Field(default_factory=list)
 
 
 class CheckInCorrectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    text_revision: int = Field(ge=1)
 
     corrected_text: str = Field(min_length=1, max_length=4000)
 
@@ -130,9 +136,15 @@ class SymptomFactResponse(BaseModel):
     evidence: str
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     confirmed: bool
+    id: str | None = None
+    check_in_id: str | None = None
+    text_revision: int | None = None
+    recorded_at: datetime | None = None
+    confirmed_at: datetime | None = None
 
 
 class FactExtractionResponse(BaseModel):
+    text_revision: int
     status: Literal["awaiting_confirmation"]
     provider: Literal["gigachat"]
     facts: list[SymptomFactResponse]
@@ -151,6 +163,8 @@ class SymptomFactConfirmInput(BaseModel):
 class CheckInConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    text_revision: int = Field(ge=1)
+
     corrected_text: str | None = Field(default=None, max_length=4000)
     facts: list[SymptomFactConfirmInput] = Field(max_length=10)
 
@@ -166,6 +180,8 @@ class CheckInConfirmRequest(BaseModel):
 
 
 class CheckInConfirmResponse(BaseModel):
+    text_revision: int
+    confirmed_at: datetime
     status: Literal["confirmed"]
     check_in_id: str
     facts: list[SymptomFactResponse]
@@ -180,6 +196,20 @@ class TranscriptionResponse(BaseModel):
     duration_seconds: float | None
 
 
+class TextProvenance(BaseModel):
+    check_in_id: str
+    fact_id: str
+    text_revision: int
+    category: str
+    polarity: Literal["present", "absent", "uncertain"]
+    evidence: str
+    temporal_context: str | None
+    recorded_at: datetime
+    confirmed_at: datetime
+    rule_version: str
+    resolution: Literal["latest", "conflict", "direct_confirmation"]
+
+
 class AnalysisResponse(BaseModel):
     status: MonitoringStatus
     metric: Metric | None
@@ -188,6 +218,7 @@ class AnalysisResponse(BaseModel):
     message: str
     algorithm_version: str
     analysis_details: "NumericAnalysisDetails | None" = None
+    text_provenance: list[TextProvenance] = Field(default_factory=list)
 
 
 class BaselineResponse(BaseModel):
@@ -243,6 +274,7 @@ class MonitoringEventResponse(BaseModel):
     ruleset_version: str
     created_at: datetime
     analysis_details: NumericAnalysisDetails | None = None
+    text_provenance: list[TextProvenance] = Field(default_factory=list)
 
 
 class NotificationResponse(BaseModel):

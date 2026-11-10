@@ -6,8 +6,12 @@ implementation without changing the API or monitoring domain logic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from app.facts import TextRevisionConflict
 
 from app.domain.monitoring import MonitoringEvent, Observation, SymptomFact
 
@@ -20,6 +24,13 @@ class CheckInRecord:
     source: str
     created_at: datetime
     corrected_text: str | None = None
+    text_revision: int = 1
+    confirmed_revision: int | None = None
+    confirmed_at: datetime | None = None
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.confirmed_revision == self.text_revision
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,56 +95,58 @@ class InMemoryStore:
         )
 
     def update_check_in_text(
-        self, profile_id: str, check_in_id: str, corrected_text: str
+        self, profile_id: str, check_in_id: str, corrected_text: str, *, expected_revision: int,
     ) -> CheckInRecord | None:
         check_in = self.get_check_in(profile_id, check_in_id)
         if check_in is None:
             return None
-        replacement = CheckInRecord(
-            id=check_in.id,
-            profile_id=check_in.profile_id,
-            text=check_in.text,
-            source=check_in.source,
-            created_at=check_in.created_at,
-            corrected_text=corrected_text,
+        if check_in.text_revision != expected_revision:
+            raise TextRevisionConflict()
+        changed = corrected_text != (check_in.corrected_text or check_in.text)
+        replacement = replace(
+            check_in, corrected_text=corrected_text,
+            text_revision=check_in.text_revision + int(changed),
+            confirmed_revision=None if changed else check_in.confirmed_revision,
+            confirmed_at=None if changed else check_in.confirmed_at,
         )
         self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
+        if changed:
+            self.symptom_facts.pop(check_in_id, None)
         return replacement
 
     def confirm_check_in(
-        self,
-        profile_id: str,
-        check_in_id: str,
-        *,
-        corrected_text: str | None,
-        facts: list[SymptomFact],
+        self, profile_id: str, check_in_id: str, *, corrected_text: str | None,
+        facts: list[SymptomFact], expected_revision: int,
     ) -> list[SymptomFact]:
         check_in = self.get_check_in(profile_id, check_in_id)
         if check_in is None:
             raise KeyError(check_in_id)
-        replacement = CheckInRecord(
-            id=check_in.id,
-            profile_id=check_in.profile_id,
-            text=check_in.text,
-            source=check_in.source,
-            created_at=check_in.created_at,
-            corrected_text=corrected_text,
-        )
-        self.check_ins = [
-            replacement if item.id == check_in_id else item for item in self.check_ins
-        ]
-        self.symptom_facts[check_in_id] = list(facts)
-        return list(facts)
+        if check_in.text_revision != expected_revision or (
+            corrected_text is not None and corrected_text != (check_in.corrected_text or check_in.text)
+        ):
+            raise TextRevisionConflict()
+        now = datetime.now(timezone.utc)
+        replacement = replace(check_in, confirmed_revision=expected_revision, confirmed_at=now)
+        saved = [replace(fact, id=f"fact-{uuid4().hex}", check_in_id=check_in.id,
+                         text_revision=expected_revision, recorded_at=check_in.created_at,
+                         confirmed_at=now, confirmed=True) for fact in facts]
+        self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
+        self.symptom_facts[check_in_id] = saved
+        return list(saved)
 
     def list_symptom_facts(self, check_in_id: str) -> list[SymptomFact]:
-        return list(self.symptom_facts.get(check_in_id, []))
+        check_in = next((item for item in self.check_ins if item.id == check_in_id), None)
+        if check_in is None or not check_in.is_confirmed:
+            return []
+        return [fact for fact in self.symptom_facts.get(check_in_id, [])
+                if fact.confirmed and fact.text_revision == check_in.text_revision]
 
     def save_monitoring_event(self, profile_id: str, event: MonitoringEvent) -> MonitoringEventRecord:
         now = datetime.now().astimezone()
         record = MonitoringEventRecord(
             id=f"event-{len(self.monitoring_events) + 1:08d}",
             profile_id=profile_id,
-            event=event,
+            event=deepcopy(event),
             created_at=now,
         )
         self.monitoring_events.append(record)

@@ -49,6 +49,10 @@ type CheckIn = {
   corrected_text: string | null;
   status: string;
   created_at: string;
+  text_revision: number;
+  confirmed_revision: number | null;
+  confirmed_at: string | null;
+  facts: Fact[];
 };
 
 type CaregiverSummary = {
@@ -116,6 +120,9 @@ export function App() {
   const [facts, setFacts] = useState<Fact[]>([]);
   const [safetyMessage, setSafetyMessage] = useState("");
   const [extractionFallback, setExtractionFallback] = useState(false);
+  const [reviewDirty, setReviewDirty] = useState(false);
+  const requestEpoch = useRef(0);
+  const textDirty = activeCheckIn !== null && factText.trim() !== (activeCheckIn.corrected_text ?? activeCheckIn.text);
 
   async function apiFetch(path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
@@ -146,6 +153,9 @@ export function App() {
     setToken(null);
     setUser(null);
     setCaregiverSummary(null);
+    requestEpoch.current += 1;
+    setActiveCheckIn(null);
+    setFacts([]);
   }
 
   async function loadObservations() {
@@ -170,6 +180,8 @@ export function App() {
     if (!user) return;
     if (user.role === "user") {
       void loadObservations();
+      const savedId = localStorage.getItem("medsi-care-check-in");
+      if (savedId) void refreshCheckIn(savedId);
       void loadTrends();
     }
     else void apiFetch(`/api/v1/caregiver/profiles/${profileId}/summary`).then(async (response) => {
@@ -219,6 +231,9 @@ export function App() {
     }
     setText("");
     const saved = await response.json();
+    requestEpoch.current += 1;
+    localStorage.setItem("medsi-care-check-in", saved.id);
+    setReviewDirty(false);
     setActiveCheckIn(saved);
     setFactText(saved.corrected_text ?? saved.text);
     setFacts([]);
@@ -232,11 +247,37 @@ export function App() {
     await saveCheckIn(text);
   }
 
+  async function refreshCheckIn(id = activeCheckIn?.id) {
+    if (!id) return;
+    const epoch = ++requestEpoch.current;
+    const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${id}`);
+    if (epoch !== requestEpoch.current) return;
+    if (!response.ok) {
+      setError(await describeApiError(response, "Не удалось загрузить запись"));
+      return;
+    }
+    const saved: CheckIn = await response.json();
+    if (epoch !== requestEpoch.current) return;
+    setActiveCheckIn(saved);
+    setFactText(saved.corrected_text ?? saved.text);
+    setFacts(saved.facts);
+    setReviewDirty(false);
+    setError("");
+  }
+
+  function editFacts(next: Fact[]) {
+    requestEpoch.current += 1;
+    setFacts(next);
+    setReviewDirty(true);
+  }
+
   async function extractFacts() {
-    if (!activeCheckIn) return;
+    if (!activeCheckIn || textDirty) return;
+    const epoch = ++requestEpoch.current;
     setError("");
     try {
       const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/extract`, { method: "POST" });
+      if (epoch !== requestEpoch.current) return;
       if (!response.ok) {
         setExtractionFallback(response.status === 502 || response.status === 503);
         setError(response.status === 502 || response.status === 503
@@ -245,9 +286,12 @@ export function App() {
         return;
       }
       const payload = await response.json();
+      if (epoch !== requestEpoch.current || payload.text_revision !== activeCheckIn.text_revision) return;
       setFacts(payload.facts);
+      setReviewDirty(true);
       setExtractionFallback(false);
     } catch {
+      if (epoch !== requestEpoch.current) return;
       setExtractionFallback(true);
       setError("Нет связи с сервером. Проверьте подключение и повторите попытку.");
     }
@@ -255,36 +299,50 @@ export function App() {
 
   async function saveCorrection() {
     if (!activeCheckIn || !factText.trim()) return;
+    const epoch = ++requestEpoch.current;
     const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ corrected_text: factText }),
+      body: JSON.stringify({ corrected_text: factText, text_revision: activeCheckIn.text_revision }),
     });
+    if (epoch !== requestEpoch.current) return;
     if (!response.ok) {
       setError(await describeApiError(response, "Не удалось сохранить исправленный текст"));
       return;
     }
-    setActiveCheckIn(await response.json());
+    const saved: CheckIn = await response.json();
+    if (epoch !== requestEpoch.current) return;
+    setActiveCheckIn(saved);
+    setFactText(saved.corrected_text ?? saved.text);
+    setFacts(saved.facts);
+    setReviewDirty(false);
+    setError("");
   }
 
   async function confirmFacts() {
-    if (!activeCheckIn) return;
+    if (!activeCheckIn || textDirty) return;
+    const epoch = ++requestEpoch.current;
     const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        corrected_text: factText,
+        text_revision: activeCheckIn.text_revision,
         facts: facts.map(({ category, polarity, evidence, temporal_context, confidence }) => ({
           category, polarity, evidence, temporal_context, confidence,
         })),
       }),
     });
+    if (epoch !== requestEpoch.current) return;
     if (!response.ok) {
       setError(await describeApiError(response, "Доказательство факта должно присутствовать в подтверждённом тексте"));
       return;
     }
     const payload = await response.json();
+    if (epoch !== requestEpoch.current) return;
     setFacts(payload.facts);
+    setActiveCheckIn({ ...activeCheckIn, status: "confirmed", facts: payload.facts,
+      confirmed_revision: payload.text_revision, confirmed_at: payload.confirmed_at });
+    setReviewDirty(false);
     setSafetyMessage(payload.safety_event?.message ?? "");
     setError("");
   }
@@ -467,18 +525,27 @@ export function App() {
           <h2>Проверка фактов</h2>
           {extractionFallback && <p role="status">Резервный режим: автоматическое извлечение отключено для этой попытки. При доступном сервере ручной ввод, история и числовой анализ работают без LLM.</p>}
           {!activeCheckIn ? <p>Сначала сохраните текстовую или голосовую запись.</p> : <>
-            <label>Подтверждённый текст<textarea value={factText} onChange={(event) => setFactText(event.target.value)} /></label>
+            <p role="status">{textDirty ? "Текст изменён: сохраните его и повторно проверьте факты." : reviewDirty ? "Факты изменены: требуется подтверждение." : activeCheckIn.status === "confirmed" ? `Проверено: ${facts.length} фактов. Редакция ${activeCheckIn.text_revision}.` : "Ожидает проверки фактов."}</p>
+            <label>Текст для проверки<textarea value={factText} onChange={(event) => {
+              requestEpoch.current += 1;
+              setFactText(event.target.value);
+              setFacts([]);
+              setReviewDirty(true);
+            }} /></label>
             <div className="button-row">
               <button type="button" onClick={() => void saveCorrection()}>Сохранить исправление</button>
-              <button type="button" onClick={() => void extractFacts()}>Извлечь факты</button>
+              <button type="button" onClick={() => void refreshCheckIn()}>Загрузить сохранённую запись</button>
+              <button type="button" disabled={textDirty} onClick={() => void extractFacts()}>Извлечь факты</button>
             </div>
             {facts.map((fact, index) => <div className="fact-row" key={`${fact.category}-${index}`}>
-              <input value={fact.category} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, category: event.target.value } : item))} />
-              <select value={fact.polarity} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, polarity: event.target.value as Fact["polarity"] } : item))}><option value="present">есть</option><option value="absent">нет</option><option value="uncertain">неясно</option></select>
-              <input value={fact.evidence} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, evidence: event.target.value } : item))} />
+              <input value={fact.category} onChange={(event) => editFacts(facts.map((item, i) => i === index ? { ...item, category: event.target.value } : item))} />
+              <select value={fact.polarity} onChange={(event) => editFacts(facts.map((item, i) => i === index ? { ...item, polarity: event.target.value as Fact["polarity"] } : item))}><option value="present">есть</option><option value="absent">нет</option><option value="uncertain">неясно</option></select>
+              <input value={fact.evidence} onChange={(event) => editFacts(facts.map((item, i) => i === index ? { ...item, evidence: event.target.value } : item))} />
+              <button type="button" onClick={() => editFacts(facts.filter((_, i) => i !== index))}>Удалить факт</button>
             </div>)}
             {safetyMessage && <div className="result result-safety"><strong>{safetyMessage}</strong></div>}
-            {facts.length > 0 && <button type="button" onClick={() => void confirmFacts()}>Подтвердить факты</button>}
+            {facts.length === 0 && <p>Пустой результат означает проверку без фактов и не отрицает все симптомы.</p>}
+            <button type="button" disabled={textDirty} onClick={() => void confirmFacts()}>{facts.length ? "Подтвердить факты" : "Подтвердить пустой результат"}</button>
           </>}
         </section>
       </section>

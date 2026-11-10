@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, update, delete
 from sqlalchemy.orm import sessionmaker
 
 from app.db.models import (
@@ -18,6 +19,7 @@ from app.db.models import (
 )
 from app.domain.monitoring import Metric, MonitoringEvent, MonitoringStatus, Observation, SymptomFact
 from app.store import CheckInRecord, MonitoringEventRecord, NotificationRecord
+from app.facts import TextRevisionConflict
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -100,6 +102,8 @@ class DatabaseStore:
                     source=check_in.source,
                     created_at=check_in.created_at,
                     corrected_text=check_in.corrected_text,
+                    text_revision=check_in.text_revision, confirmed_revision=check_in.confirmed_revision,
+                    confirmed_at=check_in.confirmed_at,
                 )
             )
             session.commit()
@@ -120,6 +124,8 @@ class DatabaseStore:
                     source=row.source,
                     created_at=_as_utc(row.created_at),
                     corrected_text=row.corrected_text,
+                    text_revision=row.text_revision, confirmed_revision=row.confirmed_revision,
+                    confirmed_at=_as_utc(row.confirmed_at) if row.confirmed_at else None,
                 )
                 for row in rows
             ]
@@ -141,85 +147,89 @@ class DatabaseStore:
                 source=row.source,
                 created_at=_as_utc(row.created_at),
                 corrected_text=row.corrected_text,
+                text_revision=row.text_revision, confirmed_revision=row.confirmed_revision,
+                confirmed_at=_as_utc(row.confirmed_at) if row.confirmed_at else None,
             )
 
     def update_check_in_text(
-        self, profile_id: str, check_in_id: str, corrected_text: str
+        self, profile_id: str, check_in_id: str, corrected_text: str, *, expected_revision: int,
     ) -> CheckInRecord | None:
         with self.session_factory() as session:
-            row = session.scalar(
-                select(CheckInModel).where(
-                    CheckInModel.profile_id == profile_id,
-                    CheckInModel.id == check_in_id,
-                )
-            )
+            row = session.scalar(select(CheckInModel).where(
+                CheckInModel.id == check_in_id, CheckInModel.profile_id == profile_id,
+            ).with_for_update())
             if row is None:
                 return None
-            row.corrected_text = corrected_text
+            if row.text_revision != expected_revision:
+                raise TextRevisionConflict()
+            changed = corrected_text != (row.corrected_text or row.text)
+            values = {"corrected_text": corrected_text, "text_revision": expected_revision + int(changed)}
+            if changed:
+                values.update(confirmed_revision=None, confirmed_at=None)
+            result = session.execute(update(CheckInModel).where(
+                CheckInModel.id == check_in_id, CheckInModel.profile_id == profile_id,
+                CheckInModel.text_revision == expected_revision,
+            ).values(**values))
+            if result.rowcount != 1:
+                raise TextRevisionConflict()
+            if changed:
+                session.execute(delete(SymptomFactModel).where(SymptomFactModel.check_in_id == check_in_id))
             session.commit()
-            return CheckInRecord(
-                id=row.id,
-                profile_id=row.profile_id,
-                text=row.text,
-                source=row.source,
-                created_at=_as_utc(row.created_at),
-                corrected_text=row.corrected_text,
-            )
+        return self.get_check_in(profile_id, check_in_id)
 
     def confirm_check_in(
-        self,
-        profile_id: str,
-        check_in_id: str,
-        *,
-        corrected_text: str | None,
-        facts: list[SymptomFact],
+        self, profile_id: str, check_in_id: str, *, corrected_text: str | None,
+        facts: list[SymptomFact], expected_revision: int,
     ) -> list[SymptomFact]:
         with self.session_factory() as session:
-            check_in = session.scalar(
-                select(CheckInModel).where(
-                    CheckInModel.profile_id == profile_id,
-                    CheckInModel.id == check_in_id,
-                )
-            )
-            if check_in is None:
+            row = session.scalar(select(CheckInModel).where(
+                CheckInModel.id == check_in_id, CheckInModel.profile_id == profile_id,
+            ).with_for_update())
+            if row is None:
                 raise KeyError(check_in_id)
-            check_in.corrected_text = corrected_text
-            check_in.symptom_facts.clear()
+            if row.text_revision != expected_revision or (
+                corrected_text is not None and corrected_text != (row.corrected_text or row.text)
+            ):
+                raise TextRevisionConflict()
             now = datetime.now(timezone.utc)
+            result = session.execute(update(CheckInModel).where(
+                CheckInModel.id == check_in_id, CheckInModel.profile_id == profile_id,
+                CheckInModel.text_revision == expected_revision,
+            ).values(confirmed_revision=expected_revision, confirmed_at=now))
+            if result.rowcount != 1:
+                raise TextRevisionConflict()
+            session.execute(delete(SymptomFactModel).where(SymptomFactModel.check_in_id == check_in_id))
+            saved = []
             for fact in facts:
-                check_in.symptom_facts.append(
-                    SymptomFactModel(
-                        id=f"fact-{uuid4().hex}",
-                        category=fact.category,
-                        polarity=fact.polarity,
-                        temporal_context=fact.temporal_context,
-                        evidence=fact.evidence,
-                        confidence=fact.confidence,
-                        confirmed=fact.confirmed,
-                        created_at=now,
-                    )
-                )
+                fact_id = f"fact-{uuid4().hex}"
+                saved.append(replace(fact, id=fact_id, check_in_id=check_in_id,
+                                     text_revision=expected_revision, recorded_at=_as_utc(row.created_at),
+                                     confirmed_at=now, confirmed=True))
+                session.add(SymptomFactModel(
+                    id=fact_id, check_in_id=check_in_id,
+                    category=fact.category, polarity=fact.polarity,
+                    temporal_context=fact.temporal_context, evidence=fact.evidence,
+                    confidence=fact.confidence, confirmed=True,
+                    text_revision=expected_revision, created_at=now,
+                ))
             session.commit()
-        return list(facts)
+        return saved
 
     def list_symptom_facts(self, check_in_id: str) -> list[SymptomFact]:
         with self.session_factory() as session:
-            rows = session.scalars(
-                select(SymptomFactModel)
-                .where(SymptomFactModel.check_in_id == check_in_id)
-                .order_by(SymptomFactModel.created_at)
-            ).all()
-            return [
-                SymptomFact(
-                    category=row.category,
-                    polarity=row.polarity,
-                    evidence=row.evidence,
-                    confirmed=row.confirmed,
-                    temporal_context=row.temporal_context,
-                    confidence=row.confidence,
-                )
-                for row in rows
-            ]
+            rows = session.scalars(select(SymptomFactModel).join(CheckInModel).where(
+                SymptomFactModel.check_in_id == check_in_id,
+                SymptomFactModel.confirmed.is_(True),
+                CheckInModel.confirmed_revision == CheckInModel.text_revision,
+                SymptomFactModel.text_revision == CheckInModel.text_revision,
+            ).order_by(SymptomFactModel.id)).all()
+            return [SymptomFact(
+                category=row.category, polarity=row.polarity, evidence=row.evidence,
+                confirmed=row.confirmed, temporal_context=row.temporal_context,
+                confidence=row.confidence, id=row.id, check_in_id=row.check_in_id,
+                text_revision=row.text_revision, recorded_at=_as_utc(row.check_in.created_at),
+                confirmed_at=_as_utc(row.created_at),
+            ) for row in rows]
 
     def save_monitoring_event(self, profile_id: str, event: MonitoringEvent) -> MonitoringEventRecord:
         now = datetime.now(timezone.utc)
@@ -240,6 +250,7 @@ class DatabaseStore:
                     period_end=event.period_end,
                     ruleset_version=event.algorithm_version,
                     analysis_details=event.analysis_details,
+                    text_provenance=list(event.text_provenance),
                     created_at=now,
                 )
             )
@@ -281,6 +292,7 @@ class DatabaseStore:
                         period_start=_as_utc(row.period_start) if row.period_start else None,
                         period_end=_as_utc(row.period_end) if row.period_end else None,
                         analysis_details=row.analysis_details,
+                        text_provenance=tuple(row.text_provenance or []),
                     ),
                     created_at=_as_utc(row.created_at),
                 )

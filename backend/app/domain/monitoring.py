@@ -49,6 +49,11 @@ class SymptomFact:
     confirmed: bool = True
     temporal_context: str | None = None
     confidence: float | None = None
+    id: str | None = None
+    check_in_id: str | None = None
+    text_revision: int | None = None
+    recorded_at: datetime | None = None
+    confirmed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +89,7 @@ class MonitoringEvent:
     period_start: datetime | None = None
     period_end: datetime | None = None
     analysis_details: dict | None = None
+    text_provenance: tuple[dict, ...] = ()
 
 
 _UNITS: dict[Metric, str] = {
@@ -311,8 +317,7 @@ def analyze_metrics(
     status = (MonitoringStatus.ATTENTION if "attention" in statuses else
               MonitoringStatus.INSUFFICIENT_DATA if "insufficient_data" in statuses else
               MonitoringStatus.NO_CHANGE if "no_change" in statuses else MonitoringStatus.INSUFFICIENT_DATA)
-    # Preserve the existing fact behavior for now. F2/F3/F9 and textual
-    # provenance are explicitly a separate, unfinished work block.
+    # The application passes only current facts selected by the lifecycle rules.
     facts = [fact for fact in symptom_facts if fact.confirmed and fact.polarity == "present"]
     if facts and any(item["z_score"] is not None for item in metrics):
         status = MonitoringStatus.ATTENTION

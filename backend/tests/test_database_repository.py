@@ -41,7 +41,7 @@ class DatabaseRepositoryTests(TestCase):
             self.assertEqual(store.list_observations("profile-demo"), [observation])
             self.assertEqual(store.list_check_ins("profile-demo"), [check_in])
             corrected = store.update_check_in_text(
-                "profile-demo", check_in.id, "Исправленный текст о слабости"
+                "profile-demo", check_in.id, "Исправленный текст о слабости", expected_revision=1
             )
             self.assertEqual(corrected.corrected_text, "Исправленный текст о слабости")
             self.assertEqual(store.list_symptom_facts(check_in.id), [])
@@ -56,14 +56,17 @@ class DatabaseRepositoryTests(TestCase):
                     confidence=0.9,
                 )
             ]
-            store.confirm_check_in(
+            saved_facts = store.confirm_check_in(
                 "profile-demo",
                 check_in.id,
-                corrected_text=check_in.text,
+                corrected_text=corrected.corrected_text,
+                expected_revision=corrected.text_revision,
                 facts=facts,
             )
-            self.assertEqual(store.list_symptom_facts(check_in.id), facts)
-            self.assertEqual(store.get_check_in("profile-demo", check_in.id).corrected_text, check_in.text)
+            self.assertEqual(store.list_symptom_facts(check_in.id), saved_facts)
+            self.assertEqual(saved_facts[0].category, facts[0].category)
+            self.assertTrue(saved_facts[0].id)
+            self.assertEqual(store.get_check_in("profile-demo", check_in.id).corrected_text, corrected.corrected_text)
 
             event = MonitoringEvent(
                 status=MonitoringStatus.ATTENTION,

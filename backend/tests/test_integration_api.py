@@ -83,14 +83,14 @@ class ApiIntegrationTests(TestCase):
             corrected = main.correct_check_in(
                 "profile-demo",
                 check_in.id,
-                CheckInCorrectionRequest(corrected_text="Сегодня чувствую слабость"),
+                CheckInCorrectionRequest(text_revision=1, corrected_text="Сегодня чувствую слабость"),
                 self.user,
             )
             self.assertEqual(corrected.corrected_text, "Сегодня чувствую слабость")
             confirmed = main.confirm_check_in_facts(
                 "profile-demo",
                 check_in.id,
-                CheckInConfirmRequest(
+                CheckInConfirmRequest(text_revision=1,
                     corrected_text="Сегодня чувствую слабость",
                     facts=[{
                         "category": "weakness",
@@ -111,7 +111,7 @@ class ApiIntegrationTests(TestCase):
             safety = main.confirm_check_in_facts(
                 "profile-demo",
                 safety_check_in.id,
-                CheckInConfirmRequest(facts=[{
+                CheckInConfirmRequest(text_revision=1, facts=[{
                     "category": "chest_pain",
                     "polarity": "present",
                     "evidence": "сильная боль в груди",
@@ -171,7 +171,10 @@ class ApiIntegrationTests(TestCase):
         analysis = main.analyze_profile(
             "profile-demo", self.user, as_of=datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
         )
-        self.assertEqual(analysis.status.value, "attention")
+        # November confirmation must not influence an October historical analysis.
+        # The new pressure metric has insufficient history; sleep is within baseline.
+        self.assertEqual(analysis.status.value, "insufficient_data")
+        self.assertEqual(analysis.text_provenance, [])
         self.assertGreaterEqual(len(main.store.list_monitoring_events("profile-demo")), 2)
 
         caregiver_summary = main.caregiver_summary("profile-demo", self.caregiver)

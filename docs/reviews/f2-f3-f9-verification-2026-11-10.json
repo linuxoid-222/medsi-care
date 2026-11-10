@@ -1,0 +1,76 @@
+{
+  "synthetic": true,
+  "findings": [
+    "F2",
+    "F3",
+    "F9",
+    "text provenance"
+  ],
+  "base_commit": "54ae03701a33cbd41ce4606cb6655ceb33836682",
+  "checked_at_utc": "2026-11-10T20:06:02.425395+00:00",
+  "fresh_postgresql_upgrade_head": "passed",
+  "migration_from_empty_to_0005_and_upgrade_0006_with_legacy_rows": "passed",
+  "alembic_check": "passed",
+  "pytest_with_live_postgres": "126 passed in 6.32s",
+  "provenance_example": {
+    "check_in_id": "checkin-2f95dba0556b4652904a00ef967b4cb4",
+    "fact_id": "fact-56fa11ab6f214369b256715983559bbb",
+    "text_revision": 1,
+    "category": "chest_pain",
+    "polarity": "present",
+    "evidence": "боль в груди",
+    "temporal_context": null,
+    "recorded_at": "2026-11-10T20:06:13.625309Z",
+    "confirmed_at": "2026-11-10T20:06:13.636711Z",
+    "rule_version": "safety-v1",
+    "resolution": "direct_confirmation"
+  },
+  "live_http_demo_reset_safety_revision_empty_confirmation_provenance": "passed",
+  "database_cleanup": "isolated database dropped in finally",
+  "original_regressions_before_fix": {
+    "stores": [
+      "memory",
+      "sqlite"
+    ],
+    "failed": 10,
+    "cases": [
+      "sixty_day_old_complaint",
+      "current_negation_overrides_positive",
+      "edit_invalidates_confirmation",
+      "empty_confirmation_survives_get_restart",
+      "event_text_provenance_survives_edit"
+    ]
+  },
+  "final_checks": {
+    "pytest_without_postgres": "103 passed, 23 skipped in 4.24s",
+    "compileall_backend_experiments": "passed",
+    "frontend_build": "passed; existing bundle size warning >500 kB",
+    "git_diff_check": "passed",
+    "research_v2_verify_report": "passed",
+    "research_v2_SHA256SUMS": "all 9 files OK"
+  },
+  "ui_smoke": {
+    "browser": "IAB",
+    "storage": "memory",
+    "backend": "real local FastAPI; synthetic facts prepared via confirmation API",
+    "llm_or_asr_used": false,
+    "passed": [
+      "create check-in",
+      "GET two previously confirmed facts",
+      "delete one fact, confirm remainder",
+      "delete last fact, confirm empty",
+      "reload retains confirmed empty result",
+      "edit disables extraction and confirmation until PATCH",
+      "PATCH requires fresh review",
+      "confirm revision 2 empty and reload"
+    ]
+  },
+  "limitations": [
+    "F4/F6/F7/F8 remain open",
+    "24h is a technical MVP window, not a clinical norm",
+    "legacy check-ins require explicit reconfirmation",
+    "no full replay of previous text revisions; saved events retain original snapshots",
+    "relative temporal_context is preserved, not parsed into symptom onset",
+    "voice E2E and demo date alignment not performed"
+  ]
+}
