@@ -54,6 +54,7 @@ class SymptomFact:
     text_revision: int | None = None
     recorded_at: datetime | None = None
     confirmed_at: datetime | None = None
+    facts_revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

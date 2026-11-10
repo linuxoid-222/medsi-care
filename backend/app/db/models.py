@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Index, Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -50,6 +50,7 @@ class CheckInModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     corrected_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     text_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    facts_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     confirmed_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     profile: Mapped[ProfileModel] = relationship(back_populates="check_ins")
@@ -78,6 +79,9 @@ class SymptomFactModel(Base):
 
 class MonitoringEventModel(Base):
     __tablename__ = "monitoring_events"
+
+    __table_args__ = (Index("uq_monitoring_events_identity_key", "identity_key", unique=True),)
+    identity_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     profile_id: Mapped[str] = mapped_column(

@@ -1,0 +1,115 @@
+{
+  "synthetic": true,
+  "findings": [
+    "F4",
+    "F6",
+    "F7",
+    "F8"
+  ],
+  "base_commit": "3f029a362512557e0d3406d412a98ea940967a84",
+  "checked_at_utc": "2026-11-10T20:29:05.007743+00:00",
+  "fresh_postgresql_upgrade_head": "passed",
+  "migration_0006_to_0007_with_legacy_rows": "passed",
+  "alembic_check": "passed",
+  "pytest_with_live_postgres": "167 passed, 2 skipped in 10.15s",
+  "provenance_example": {
+    "facts_revision": 1,
+    "check_in_id": "checkin-767f59bcaf334fec922fdf0b36ade772",
+    "fact_id": "fact-eedba2f20da9447991a18d2c30a21dc7",
+    "text_revision": 1,
+    "category": "chest_pain",
+    "polarity": "present",
+    "evidence": "боль в груди",
+    "temporal_context": null,
+    "recorded_at": "2026-11-10T20:29:20.037565Z",
+    "confirmed_at": "2026-11-10T20:29:20.053770Z",
+    "rule_version": "safety-v1",
+    "resolution": "direct_confirmation"
+  },
+  "live_http_demo_reset_safety_revision_empty_confirmation_provenance": "passed",
+  "database_cleanup": "all isolated PostgreSQL databases, including browser DB, dropped; main database unchanged",
+  "browser_checks": {
+    "browser": "IAB",
+    "backend": "real local FastAPI",
+    "storage": "PostgreSQL 18.6, isolated medsi_test_* database",
+    "llm_or_asr_used": false,
+    "F4": [
+      "sleep empty -> error; database count 0",
+      "sleep spaces -> error; database count 0",
+      "sleep explicit 0 and 8 -> saved",
+      "activity empty/spaces -> error; still only 2 sleep rows",
+      "activity explicit 0 and 30 -> saved"
+    ],
+    "F8": [
+      "extract 503 with missing GigaChat configuration -> explicit fallback",
+      "after extraction failure: 0 facts/events/notifications",
+      "add manual chest_pain/present/evidence draft -> still 0 saved facts/events",
+      "explicit confirmation -> safety event with revision/provenance",
+      "repeated confirmation -> same event, facts_revision=1",
+      "caregiver UI shows one safety event and one unread own notification"
+    ],
+    "final_rows": {
+      "observations": 4,
+      "facts": 1,
+      "events": 1,
+      "notifications_total_two_recipients": 2
+    },
+    "provenance": [
+      {
+        "check_in_id": "checkin-8d01edfc0a5b49b89e788468f4c8c994",
+        "fact_id": "fact-94f4c0e63f5a48e2b2471b78cbf58398",
+        "text_revision": 1,
+        "facts_revision": 1,
+        "category": "chest_pain",
+        "polarity": "present",
+        "evidence": "сильная боль в груди",
+        "temporal_context": null,
+        "recorded_at": "2026-11-10T20:21:53.841030+00:00",
+        "confirmed_at": "2026-11-10T20:22:18.940294+00:00",
+        "rule_version": "safety-v1",
+        "resolution": "direct_confirmation"
+      }
+    ]
+  },
+  "before_fix": {
+    "backend_memory_sqlite": "8 failed, 4 PostgreSQL skipped",
+    "frontend_empty_values": "4 failed, explicit 0/8 passed",
+    "frontend_manual_handler": "4 failed: manual entry handler absent"
+  },
+  "final_checks": {
+    "pytest_without_postgres": "130 passed, 39 skipped in 6.37s",
+    "pytest_with_postgres": "167 passed, 2 skipped in 10.15s; SQL-only cases skipped in memory, all PostgreSQL cases ran",
+    "frontend_tests": "12 passed",
+    "compileall_backend_experiments_scripts": "passed",
+    "frontend_build": "passed; existing bundle >500 kB warning",
+    "git_diff_check": "passed",
+    "research_v2_verify_report": "passed",
+    "research_v2_SHA256SUMS": "all 9 OK"
+  },
+  "limitations": [
+    "Legacy events retain NULL identity and are not retroactively deduplicated",
+    "Identical significant inputs within a local day return the first stored cutoff/snapshot",
+    "No clinical episode classifier or automatic safety closure",
+    "Full historical text revision replay remains unavailable",
+    "Demo date alignment and real voice E2E not started"
+  ],
+  "checked_source_sha256": {
+    "backend/alembic/versions/0007_event_identity.py": "cfcbfbe75416cb825c8091485fe09c3c2f2ea202a428788386705b1b3ddb6068",
+    "backend/app/db/models.py": "8ca99a92f058a97de7790e603ca723ae2e9a60f9eafce3a5fdaef019242ed573",
+    "backend/app/db/repository.py": "40484757edfe8efb6f3da8ec27eda026f79980575aaaf958662b24ab4c09b62c",
+    "backend/app/domain/monitoring.py": "5997ea5e52d6aa382f57fe32b564da2d15cb1b5f426e2f11be10e921dcb8dc93",
+    "backend/app/event_identity.py": "7cb6086a9f1f74dd1f2115f98755749d782a7cf1b17cbe112c929406c0691a78",
+    "backend/app/facts.py": "46c116cb8aee9d1c3022c3dc8fe03e72e0e20da5f139e290ae775b3085a12aea",
+    "backend/app/main.py": "263d5d906849f8821d626b4151762fff80742cd49335d2873be763b5ce8f4594",
+    "backend/app/schemas.py": "939b34f1856602ec11f911d8f369108184c3fd6ed8316a6c4d06cd953f38fb62",
+    "backend/app/store.py": "04816e0f9a3b51c04fdae39dc1eb349ba0314258e17a40779fd2dd53919dae46",
+    "backend/tests/test_event_identity_migration.py": "f566877a739c256b53c8ab5c015d3ea47d731a69a63fc33a0bca2fd7828d5098",
+    "backend/tests/test_fact_lifecycle.py": "b19ca288dbc44ed5a16eb93a9ddaf958af6e3b6f8b7996530885e4589d84e11f",
+    "backend/tests/test_product_access_idempotency.py": "d4744c53a11b5ab73a5dc739ce2f091948850bd9190c6543288ecde43623f4a5",
+    "frontend/package.json": "68da3fbdf67391241bc943ad7088e833823dbf58bd55c5d3a2288f1f62c1f8f3",
+    "frontend/src/App.tsx": "f5ed4244fd051865a14361569d0af2f575066676c18a181e050d6dce7433bf0c",
+    "frontend/src/observationInput.ts": "08ea57d2c3e35d8a0909e0b08a5e04ea4dc59689850359762983be71a0ac9024",
+    "frontend/tests/manual-facts.test.mjs": "ef14e608813695dd40bddf45eb1b1d400dbdfc4f30ec110fc658e6689d3d237c",
+    "frontend/tests/observation-input.test.mjs": "d3a280b729e6d952259baf045ecd7b821d02dd5f9f82e311ab57788c5e281599"
+  }
+}

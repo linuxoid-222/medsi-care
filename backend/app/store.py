@@ -10,6 +10,9 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from uuid import uuid4
+from threading import RLock
+
+from app.event_identity import event_identity, fact_content
 
 from app.facts import TextRevisionConflict
 
@@ -25,6 +28,7 @@ class CheckInRecord:
     created_at: datetime
     corrected_text: str | None = None
     text_revision: int = 1
+    facts_revision: int = 0
     confirmed_revision: int | None = None
     confirmed_at: datetime | None = None
 
@@ -39,6 +43,7 @@ class MonitoringEventRecord:
     profile_id: str
     event: MonitoringEvent
     created_at: datetime
+    identity_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +58,7 @@ class NotificationRecord:
 
 class InMemoryStore:
     def __init__(self) -> None:
+        self._lock = RLock()
         self.profile_timezones = {"profile-demo": "Europe/Moscow"}
         self.observations: list[Observation] = []
         self.check_ins: list[CheckInRecord] = []
@@ -97,42 +103,51 @@ class InMemoryStore:
     def update_check_in_text(
         self, profile_id: str, check_in_id: str, corrected_text: str, *, expected_revision: int,
     ) -> CheckInRecord | None:
-        check_in = self.get_check_in(profile_id, check_in_id)
-        if check_in is None:
-            return None
-        if check_in.text_revision != expected_revision:
-            raise TextRevisionConflict()
-        changed = corrected_text != (check_in.corrected_text or check_in.text)
-        replacement = replace(
-            check_in, corrected_text=corrected_text,
-            text_revision=check_in.text_revision + int(changed),
-            confirmed_revision=None if changed else check_in.confirmed_revision,
-            confirmed_at=None if changed else check_in.confirmed_at,
-        )
-        self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
-        if changed:
-            self.symptom_facts.pop(check_in_id, None)
-        return replacement
+        with self._lock:
+            check_in = self.get_check_in(profile_id, check_in_id)
+            if check_in is None:
+                return None
+            if check_in.text_revision != expected_revision:
+                raise TextRevisionConflict()
+            changed = corrected_text != (check_in.corrected_text or check_in.text)
+            replacement = replace(
+                check_in, corrected_text=corrected_text,
+                text_revision=check_in.text_revision + int(changed),
+                confirmed_revision=None if changed else check_in.confirmed_revision,
+                confirmed_at=None if changed else check_in.confirmed_at,
+            )
+            self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
+            if changed:
+                self.symptom_facts.pop(check_in_id, None)
+            return replacement
 
     def confirm_check_in(
         self, profile_id: str, check_in_id: str, *, corrected_text: str | None,
         facts: list[SymptomFact], expected_revision: int,
     ) -> list[SymptomFact]:
-        check_in = self.get_check_in(profile_id, check_in_id)
-        if check_in is None:
-            raise KeyError(check_in_id)
-        if check_in.text_revision != expected_revision or (
-            corrected_text is not None and corrected_text != (check_in.corrected_text or check_in.text)
-        ):
-            raise TextRevisionConflict()
-        now = datetime.now(timezone.utc)
-        replacement = replace(check_in, confirmed_revision=expected_revision, confirmed_at=now)
-        saved = [replace(fact, id=f"fact-{uuid4().hex}", check_in_id=check_in.id,
-                         text_revision=expected_revision, recorded_at=check_in.created_at,
-                         confirmed_at=now, confirmed=True) for fact in facts]
-        self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
-        self.symptom_facts[check_in_id] = saved
-        return list(saved)
+        with self._lock:
+            check_in = self.get_check_in(profile_id, check_in_id)
+            if check_in is None:
+                raise KeyError(check_in_id)
+            if check_in.text_revision != expected_revision or (
+                corrected_text is not None and corrected_text != (check_in.corrected_text or check_in.text)
+            ):
+                raise TextRevisionConflict()
+            current = self.list_symptom_facts(check_in_id)
+            if check_in.is_confirmed and fact_content(current) == fact_content(facts):
+                return current
+            now = datetime.now(timezone.utc)
+            facts_revision = check_in.facts_revision + 1
+            replacement = replace(check_in, confirmed_revision=expected_revision, confirmed_at=now,
+                                  facts_revision=facts_revision)
+            saved = [replace(fact, id=f"fact-{uuid4().hex}", check_in_id=check_in.id,
+                             text_revision=expected_revision, facts_revision=facts_revision,
+                             recorded_at=check_in.created_at,
+                             confirmed_at=now, confirmed=True) for fact in facts]
+            self.check_ins = [replacement if item.id == check_in_id else item for item in self.check_ins]
+            saved.sort(key=lambda fact: fact.id)
+            self.symptom_facts[check_in_id] = saved
+            return list(saved)
 
     def list_symptom_facts(self, check_in_id: str) -> list[SymptomFact]:
         check_in = next((item for item in self.check_ins if item.id == check_in_id), None)
@@ -142,27 +157,33 @@ class InMemoryStore:
                 if fact.confirmed and fact.text_revision == check_in.text_revision]
 
     def save_monitoring_event(self, profile_id: str, event: MonitoringEvent) -> MonitoringEventRecord:
-        now = datetime.now().astimezone()
-        record = MonitoringEventRecord(
-            id=f"event-{len(self.monitoring_events) + 1:08d}",
-            profile_id=profile_id,
-            event=deepcopy(event),
-            created_at=now,
-        )
-        self.monitoring_events.append(record)
-        if event.status.value in {"attention", "insufficient_data", "safety"}:
-            for recipient_id in ("demo-user", "demo-caregiver"):
-                self.notifications.append(
-                    NotificationRecord(
-                        id=f"notification-{len(self.notifications) + 1:08d}",
-                        event_id=record.id,
-                        recipient_id=recipient_id,
-                        status="unread",
-                        read_at=None,
-                        created_at=now,
+        with self._lock:
+            key = event_identity(profile_id, event)
+            existing = next((row for row in self.monitoring_events if row.identity_key == key), None)
+            if existing is not None:
+                return existing
+            now = datetime.now().astimezone()
+            record = MonitoringEventRecord(
+                id=f"event-{len(self.monitoring_events) + 1:08d}",
+                profile_id=profile_id,
+                event=deepcopy(event),
+                identity_key=key,
+                created_at=now,
+            )
+            self.monitoring_events.append(record)
+            if event.status.value in {"attention", "insufficient_data", "safety"}:
+                for recipient_id in ("demo-user", "demo-caregiver"):
+                    self.notifications.append(
+                        NotificationRecord(
+                            id=f"notification-{len(self.notifications) + 1:08d}",
+                            event_id=record.id,
+                            recipient_id=recipient_id,
+                            status="unread",
+                            read_at=None,
+                            created_at=now,
+                        )
                     )
-                )
-        return record
+            return record
 
     def list_monitoring_events(self, profile_id: str) -> list[MonitoringEventRecord]:
         return [item for item in self.monitoring_events if item.profile_id == profile_id]
@@ -186,14 +207,16 @@ class InMemoryStore:
         return None
 
     def reset_demo_profile(self, profile_id: str) -> None:
-        self.observations = [item for item in self.observations if item.profile_id != profile_id]
-        check_in_ids = {item.id for item in self.check_ins if item.profile_id == profile_id}
-        self.check_ins = [item for item in self.check_ins if item.profile_id != profile_id]
-        for check_in_id in check_in_ids:
-            self.symptom_facts.pop(check_in_id, None)
-        event_ids = {item.id for item in self.monitoring_events if item.profile_id == profile_id}
-        self.monitoring_events = [item for item in self.monitoring_events if item.profile_id != profile_id]
-        self.notifications = [item for item in self.notifications if item.event_id not in event_ids]
+        with self._lock:
+            self.observations = [item for item in self.observations if item.profile_id != profile_id]
+            check_in_ids = {item.id for item in self.check_ins if item.profile_id == profile_id}
+            self.check_ins = [item for item in self.check_ins if item.profile_id != profile_id]
+            for check_in_id in check_in_ids:
+                self.symptom_facts.pop(check_in_id, None)
+            event_ids = {item.id for item in self.monitoring_events if item.profile_id == profile_id}
+            self.monitoring_events = [item for item in self.monitoring_events if item.profile_id != profile_id]
+            self.notifications = [item for item in self.notifications if item.event_id not in event_ids]
+
 
 
 def build_store() -> InMemoryStore:

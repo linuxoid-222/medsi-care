@@ -91,6 +91,7 @@ def _fact_response(fact) -> SymptomFactResponse:
         confirmed=fact.confirmed,
         id=fact.id, check_in_id=fact.check_in_id, text_revision=fact.text_revision,
         recorded_at=fact.recorded_at, confirmed_at=fact.confirmed_at,
+        facts_revision=fact.facts_revision,
     )
 
 
@@ -136,12 +137,16 @@ def _analysis_for_profile(profile_id: str, as_of: datetime | None = None):
     )
     event = replace(event, algorithm_version=MONITORING_RULE_VERSION,
                     text_provenance=selection.provenance())
+    return _analysis_response(event), event
+
+
+def _analysis_response(event: MonitoringEvent, event_id: str | None = None) -> AnalysisResponse:
     return AnalysisResponse(
-        status=event.status, metric=event.metric, z_score=event.z_score,
+        event_id=event_id, status=event.status, metric=event.metric, z_score=event.z_score,
         evidence=list(event.evidence), message=event.message,
         algorithm_version=event.algorithm_version, analysis_details=event.analysis_details,
         text_provenance=list(event.text_provenance),
-    ), event
+    )
 
 
 @app.get("/api/v1/health")
@@ -287,7 +292,8 @@ def _check_in_response(record) -> CheckInResponse:
     return CheckInResponse(
         id=record.id, profile_id=record.profile_id, text=record.text,
         corrected_text=record.corrected_text, source=record.source, created_at=record.created_at,
-        text_revision=record.text_revision, confirmed_revision=record.confirmed_revision,
+        text_revision=record.text_revision, facts_revision=record.facts_revision,
+        confirmed_revision=record.confirmed_revision,
         confirmed_at=record.confirmed_at,
         status="confirmed" if record.is_confirmed else "awaiting_analysis",
         facts=[_fact_response(fact) for fact in store.list_symptom_facts(record.id)],
@@ -478,6 +484,7 @@ def confirm_check_in_facts(
         )
         safety_event_response = _event_response(store.save_monitoring_event(profile_id, safety_event))
     return CheckInConfirmResponse(
+        facts_revision=reviewed.facts_revision,
         text_revision=payload.text_revision,
         confirmed_at=reviewed.confirmed_at,
         status="confirmed",
@@ -493,10 +500,10 @@ def confirm_check_in_facts(
 )
 def analyze_profile(profile_id: str, user: CurrentUser, as_of: datetime | None = None) -> AnalysisResponse:
     _require_profile(profile_id)
-    require_profile_access(profile_id, user)
-    response, event = _analysis_for_profile(profile_id, as_of)
-    store.save_monitoring_event(profile_id, event)
-    return response
+    require_profile_access(profile_id, user, write=True)
+    _, event = _analysis_for_profile(profile_id, as_of)
+    record = store.save_monitoring_event(profile_id, event)
+    return _analysis_response(record.event, record.id)
 
 
 @app.get(

@@ -147,8 +147,9 @@ def test_f2_uncertain_supersedes_positive_but_empty_is_not_negation(repository):
 
 def test_f2_confirmation_after_cutoff_is_not_future_knowledge(repository):
     store, _ = repository
-    confirmed(store, "late", NOW - timedelta(hours=1))
-    facts = store.list_symptom_facts("late")
+    # The first confirmation, not a no-op retry, occurs after the cutoff.
+    store.add_check_in(CheckInRecord("late", "profile-demo", "Слабость", "manual", NOW - timedelta(hours=1)))
+    facts = [SymptomFact("weakness", "present", "Слабость", True)]
     with patch("app.store.datetime", clock(NOW + timedelta(hours=1))), patch(
         "app.db.repository.datetime", clock(NOW + timedelta(hours=1))
     ):
@@ -158,8 +159,8 @@ def test_f2_confirmation_after_cutoff_is_not_future_knowledge(repository):
 
 def test_f2_late_confirmation_does_not_rejuvenate_old_record(repository):
     store, _ = repository
-    confirmed(store, "late-old", NOW - timedelta(days=60))
-    facts = store.list_symptom_facts("late-old")
+    store.add_check_in(CheckInRecord("late-old", "profile-demo", "Слабость", "manual", NOW - timedelta(days=60)))
+    facts = [SymptomFact("weakness", "present", "Слабость", True)]
     with patch("app.store.datetime", clock(NOW)), patch("app.db.repository.datetime", clock(NOW)):
         store.confirm_check_in("profile-demo", "late-old", corrected_text=None, facts=facts, expected_revision=1)
     assert main.analyze_profile("profile-demo", USER).status.value == "no_change"

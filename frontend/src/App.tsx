@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { parseObservationValue } from "./observationInput";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Observation = {
@@ -50,6 +51,7 @@ type CheckIn = {
   status: string;
   created_at: string;
   text_revision: number;
+  facts_revision: number;
   confirmed_revision: number | null;
   confirmed_at: string | null;
   facts: Fact[];
@@ -121,6 +123,9 @@ export function App() {
   const [safetyMessage, setSafetyMessage] = useState("");
   const [extractionFallback, setExtractionFallback] = useState(false);
   const [reviewDirty, setReviewDirty] = useState(false);
+  const [manualCategory, setManualCategory] = useState("weakness");
+  const [manualPolarity, setManualPolarity] = useState<Fact["polarity"]>("present");
+  const [manualEvidence, setManualEvidence] = useState("");
   const requestEpoch = useRef(0);
   const textDirty = activeCheckIn !== null && factText.trim() !== (activeCheckIn.corrected_text ?? activeCheckIn.text);
 
@@ -197,12 +202,19 @@ export function App() {
   async function submitObservation(event: FormEvent) {
     event.preventDefault();
     setError("");
+    let numericValue: number;
+    try {
+      numericValue = parseObservationValue(value);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Проверьте значение измерения");
+      return;
+    }
     const response = await apiFetch(`/api/v1/profiles/${profileId}/observations`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         metric,
-        value: Number(value),
+        value: numericValue,
         unit,
         measured_at: new Date().toISOString(),
       }),
@@ -234,6 +246,7 @@ export function App() {
     requestEpoch.current += 1;
     localStorage.setItem("medsi-care-check-in", saved.id);
     setReviewDirty(false);
+    setManualEvidence("");
     setActiveCheckIn(saved);
     setFactText(saved.corrected_text ?? saved.text);
     setFacts([]);
@@ -269,6 +282,26 @@ export function App() {
     requestEpoch.current += 1;
     setFacts(next);
     setReviewDirty(true);
+  }
+
+  function addManualFact() {
+    if (!activeCheckIn || textDirty) {
+      setError("Сначала сохраните текущую редакцию текста.");
+      return;
+    }
+    const evidence = manualEvidence.trim();
+    if (!evidence || !factText.includes(evidence)) {
+      setError("Укажите точную цитату из текущего текста записи.");
+      return;
+    }
+    if (facts.length >= 10) {
+      setError("Можно подтвердить не более 10 фактов.");
+      return;
+    }
+    editFacts([...facts, { category: manualCategory, polarity: manualPolarity,
+      evidence, confirmed: false }]);
+    setManualEvidence("");
+    setError("");
   }
 
   async function extractFacts() {
@@ -341,6 +374,7 @@ export function App() {
     if (epoch !== requestEpoch.current) return;
     setFacts(payload.facts);
     setActiveCheckIn({ ...activeCheckIn, status: "confirmed", facts: payload.facts,
+      facts_revision: payload.facts_revision,
       confirmed_revision: payload.text_revision, confirmed_at: payload.confirmed_at });
     setReviewDirty(false);
     setSafetyMessage(payload.safety_event?.message ?? "");
@@ -490,7 +524,7 @@ export function App() {
           </label>
           <label>
             Значение
-            <input type="number" step="0.1" value={value} onChange={(event) => setValue(event.target.value)} />
+            <input type="text" inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} />
           </label>
           <button type="submit">Сохранить измерение</button>
         </form>
@@ -529,6 +563,7 @@ export function App() {
             <label>Текст для проверки<textarea value={factText} onChange={(event) => {
               requestEpoch.current += 1;
               setFactText(event.target.value);
+              setManualEvidence("");
               setFacts([]);
               setReviewDirty(true);
             }} /></label>
@@ -537,6 +572,21 @@ export function App() {
               <button type="button" onClick={() => void refreshCheckIn()}>Загрузить сохранённую запись</button>
               <button type="button" disabled={textDirty} onClick={() => void extractFacts()}>Извлечь факты</button>
             </div>
+            <fieldset disabled={textDirty}>
+              <legend>Ручной ввод фактов (без LLM)</legend>
+              <p>Выберите категорию и точную цитату. Добавление создаёт черновик; затем проверьте и подтвердите факты.</p>
+              <label>Категория ручного факта<select value={manualCategory} onChange={(event) => setManualCategory(event.target.value)}>
+                <option value="weakness">Слабость</option><option value="sleep_problem">Проблемы сна</option><option value="cough">Кашель</option>
+                <option value="chest_pain">Боль в груди</option><option value="shortness_of_breath">Затруднение дыхания</option>
+                <option value="loss_of_consciousness">Потеря сознания</option><option value="stroke_signs">Указание на нарушение речи или движения</option>
+                <option value="severe_bleeding">Сильное кровотечение</option>
+              </select></label>
+              <label>Наличие признака<select value={manualPolarity} onChange={(event) => setManualPolarity(event.target.value as Fact["polarity"])}>
+                <option value="present">Есть</option><option value="absent">Явно отрицается</option><option value="uncertain">Неясно</option>
+              </select></label>
+              <label>Цитата для ручного факта<input value={manualEvidence} onChange={(event) => setManualEvidence(event.target.value)} /></label>
+              <button type="button" onClick={addManualFact}>Добавить ручной факт</button>
+            </fieldset>
             {facts.map((fact, index) => <div className="fact-row" key={`${fact.category}-${index}`}>
               <input value={fact.category} onChange={(event) => editFacts(facts.map((item, i) => i === index ? { ...item, category: event.target.value } : item))} />
               <select value={fact.polarity} onChange={(event) => editFacts(facts.map((item, i) => i === index ? { ...item, polarity: event.target.value as Fact["polarity"] } : item))}><option value="present">есть</option><option value="absent">нет</option><option value="uncertain">неясно</option></select>

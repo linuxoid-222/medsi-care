@@ -106,6 +106,7 @@ class CheckInResponse(BaseModel):
     created_at: datetime
     status: Literal["awaiting_analysis", "confirmed"]
     text_revision: int
+    facts_revision: int
     confirmed_revision: int | None = None
     confirmed_at: datetime | None = None
     facts: list["SymptomFactResponse"] = Field(default_factory=list)
@@ -136,6 +137,7 @@ class SymptomFactResponse(BaseModel):
     evidence: str
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     confirmed: bool
+    facts_revision: int | None = None
     id: str | None = None
     check_in_id: str | None = None
     text_revision: int | None = None
@@ -180,6 +182,7 @@ class CheckInConfirmRequest(BaseModel):
 
 
 class CheckInConfirmResponse(BaseModel):
+    facts_revision: int
     text_revision: int
     confirmed_at: datetime
     status: Literal["confirmed"]
@@ -197,6 +200,7 @@ class TranscriptionResponse(BaseModel):
 
 
 class TextProvenance(BaseModel):
+    facts_revision: int | None = None
     check_in_id: str
     fact_id: str
     text_revision: int
@@ -211,6 +215,7 @@ class TextProvenance(BaseModel):
 
 
 class AnalysisResponse(BaseModel):
+    event_id: str | None = None
     status: MonitoringStatus
     metric: Metric | None
     z_score: float | None

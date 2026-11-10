@@ -6,7 +6,8 @@
 срез, AI-адаптеры, RBAC, demo-loader, trends и safety/validation блок существуют;
 интеграционные проверки и clean-run пройдены. Исследовательские результаты
 подготовлены как описательный synthetic-эксперимент; конкурсные материалы ещё
-требуют подготовки и стабилизации по календарю ТЗ.
+требуют подготовки и стабилизации по календарю ТЗ. F1–F10 исправлены с
+проверками ниже; даты демо и настоящий голосовой E2E ещё не завершены.
 
 ## 2. Дата последнего обновления
 
@@ -304,6 +305,83 @@ Docker CLI и Compose установлены, но `docker info` и `docker comp
   F4/F6/F7/F8, согласование дат demo и реальный голосовой E2E **открыты**.
   В этом блоке они не исправлялись; следующая задача — F4/F6/F7/F8.
 
+Блок пользовательского пути F4/F6/F7/F8 (2026-11-10):
+
+- Работа продолжена на `codex/facts-lifecycle-f2-f3-f9`, HEAD перед блоком
+  `3f029a3`; предыдущие F1/F5/F10 и F2/F3/F9/provenance сохранены. Переключения
+  на main, объединения веток, секретов и посторонних файлов нет.
+- До реализации: 8 backend-регрессий упали на memory/SQLite (caregiver меняет
+  хранилище, последовательные/конкурентные дубли, повтор safety confirmation).
+  Frontend-обработчик воспроизвёл 4 ошибки пустого/пробельного сна/активности;
+  явные 0/8 проходили. Четыре проверки ручного пути выявили отсутствие обработчика.
+- **F4 исправлен:** trim проверяется до Number; затем проверка конечного числа.
+  Пустое поле/пробелы дают понятную ошибку без API-запроса. Явный 0 допускается
+  для сна/активности. Серверная валидация диапазонов/units/source/quality сохранена.
+- **F6 исправлен:** POST analysis требует write=True до расчёта/сохранения.
+  Проверены последствия запретов всех затронутых write-маршрутов (analysis,
+  loader/reset, observation/check-in, PATCH/extract/confirm/ASR). GET summary,
+  profile/history/trends/events/своих notifications не пишут в БД. Собственный
+  notification/read разрешён; чужой возвращает 404 без изменений.
+- **F7 исправлен:** `event-identity-v1` SHA-256 по profile, виду события,
+  правилам, периоду и значимым числовым/текстовым входам. Период обычного анализа —
+  локальный календарный день профиля. Request time/event random ID не образуют
+  новый ключ. Повтор возвращает прежний event_id и исходный snapshot/cutoff.
+- Факты: новый facts_revision увеличивается только при содержательном новом
+  подтверждении. Unordered одинаковый набор сохраняет fact IDs/confirmed_at.
+  A→B→A, новая text_revision, новое измерение/день, истечение актуальности факта
+  и другая версия правил корректно обрабатываются как новые состояния/периоды.
+  Safety использует identity подтверждения с check-in/text/facts revision.
+- SQL: UNIQUE identity_key, вставка события и notifications одной транзакцией;
+  конкурентный проигравший читает существующий результат. Повтор не меняет
+  status/read_at. Проверены шесть одновременных analysis/confirmation, шесть
+  независимых SQL repositories, прямое нарушение unique-индекса и rollback
+  события вместе с notification при намеренной ошибке записи. Memory — RLock,
+  PostgreSQL confirmation — FOR UPDATE + CAS, SQLite — BEGIN IMMEDIATE + CAS.
+- **F8 исправлен:** ручной UI-черновик без успешного extraction: ограниченный
+  выбор категорий, polarity и точная цитата, затем явное подтверждение прежним
+  API. Evidence, text_revision, 409/422, права и provenance сохранены. При ошибке
+  LLM автоматическое создание/подтверждение фактов отсутствует.
+- Миграция `0007_event_identity`: facts_revision и nullable unique identity_key.
+  С нуля и upgrade 0006→0007 пройдены на PostgreSQL 18.6 и SQLite;
+  alembic check не нашёл расхождений. Legacy проверки/события/read_at сохранены;
+  old events имеют NULL key и не дедуплицируются ретроспективно.
+- Финальные проверки: с `MEDSI_TEST_POSTGRES_URL` — **167 passed, 2 skipped**
+  (оба skip — SQL-only варианты для memory; все PostgreSQL-кейсы выполнены).
+  Без PostgreSQL URL — **130 passed, 39 skipped**. Frontend: **12 passed** через
+  `npm --prefix frontend test`, без новых зависимостей. Команды:
+  `.venv/bin/pytest -q`, `.venv/bin/python -m compileall -q backend experiments scripts`,
+  `npm --prefix frontend run build`, `git diff --check` — проходят.
+- Live API/PostgreSQL smoke: demo 63/21, исторический attention/trends, повтор
+  analysis с тем же event_id, повтор safety confirmation с тем же event,
+  PATCH/stale409/empty confirmation/provenance, caregiver GET/read и POST403,
+  reset/reload с очисткой старых events/notifications/check-in — пройдено.
+- **Браузер IAB + настоящий FastAPI/PostgreSQL:** сон и активность — пустая
+  строка/пробелы отклонены; явно введённые 0/8 hours и 0/30 minutes сохранены.
+  До допустимого ввода БД оставалась пустой; после пробельной активности в ней
+  оставались только две строки сна. F8: реальный 503 из-за отсутствующей
+  конфигурации GigaChat → явный fallback → ручной chest_pain/present/цитата →
+  черновик без фактов/событий в БД → explicit confirmation → safety/provenance →
+  повтор без дубля → caregiver UI с одним событием и одним своим уведомлением.
+  PostgreSQL подтвердил 4 observations, 1 факт, 1 event, 2 notifications
+  (по одному каждому получателю), facts_revision=1. LLM/ASR не вызывались.
+- Новые тесты: `test_product_access_idempotency.py`,
+  `test_event_identity_migration.py`, `frontend/tests/*.test.mjs`.
+  Старый тест будущего confirmation теперь проверяет действительно первое
+  подтверждение после cutoff; одинаковый повтор больше не сдвигает confirmed_at.
+- Правила/контракт: `docs/IDEMPOTENCY.md`, MONITORING/FACTS/SAFETY, ТЗ и README.
+  Свидетельство: `docs/reviews/f4-f6-f7-f8-verification-2026-11-10.json`.
+  Все временные PostgreSQL-базы удалены, основная БД не менялась.
+- Research-v2 verify_report и 9 SHA256SUMS совпали; генератор/split/архив/метрики
+  не менялись. Предыдущие исправления покрыты полным backend-набором.
+- Ограничения: legacy-дубли не удаляются; первый post-upgrade анализ может
+  создать новый snapshot рядом с legacy событием. Совпавшие значимые входы
+  внутри дня возвращают первый snapshot/cutoff, даже для другого as_of того же
+  дня. Медицинская модель эпизодов/автозакрытие safety отсутствуют. Vite сообщает
+  существующее предупреждение bundle >500 kB. Production auth и остальные
+  прежние ограничения сохраняются. Даты demo и реальный голосовой E2E не начаты.
+- Критерии F4/F6/F7/F8 выполнены; следующий блок по плану — согласование времени
+  demo и затем настоящий голосовой E2E. Полный мультимодальный MVP пока не объявлен.
+
 ## 3. Что реализовано
 
 - модульный монолит FastAPI + React + PostgreSQL;
@@ -317,16 +395,17 @@ Docker CLI и Compose установлены, но `docker info` и `docker comp
 - сохраняемые monitoring_events и notifications с read/read-only API;
 - синтетический генератор и Baseline A/B/Method C;
 - исследовательский протокол `research-v2` и `docs/RESEARCH.md`;
-- 126 backend/исследовательских кейсов (включая 23 optional PostgreSQL-кейса).
+- 169 backend/исследовательских кейсов (37 optional PostgreSQL-кейсов;
+  2 SQL-only варианта намеренно skipped для memory).
 
 ## 4. Что проверено тестами
 
-- `.venv/bin/pytest -q` — 61 passed, 3 skipped без PostgreSQL URL;
-  с `MEDSI_TEST_POSTGRES_URL` — 64 passed, включая интеграционный API-сценарий,
+- `.venv/bin/pytest -q` — 130 passed, 39 skipped без PostgreSQL URL;
+  с `MEDSI_TEST_POSTGRES_URL` — 167 passed, 2 skipped (SQL-only memory), включая API,
   диапазонную валидацию, safety, confirmation и caregiver notification;
 - `.venv/bin/python -m compileall -q backend experiments`;
 - `DATABASE_URL=sqlite:///... .venv/bin/alembic upgrade head` и `alembic check` —
-  миграции до `0004_observation_quality` проходят;
+  миграции до `0007_event_identity` проходят;
 - frontend production build через `npm run build`;
 - demo/reset smoke: 21 день, 63 observations, 21 check-in, повторная загрузка
   с тем же seed воспроизводима, reset удаляет events/notifications;
@@ -369,23 +448,24 @@ P/R/F1=1.000. Ошибки отрицания 0/21. Неопределённых
 
 Независимый аудит выявил продуктовые блокеры, несмотря на прежние clean-run
 и PostgreSQL smoke. F1/F5/F10 и затем F2/F3/F9/text provenance исправлены;
-F4/F6/F7/F8 остаются открытыми. Полный мультимодальный MVP не подтверждён.
+F4/F6/F7/F8 также исправлены с проверками выше. Полный мультимодальный
+MVP не подтверждён: остались даты демо и настоящий голосовой E2E.
 
 ## 7. Оставшиеся проблемы
 
-- открыты F4/F6/F7/F8: пустой ввод, права анализа, дубли и safety без extraction;
+- согласование времени демосценария и реальный голосовой E2E не завершены;
 - отсутствуют baselines/audit tables из полной модели ТЗ;
 - нет rate limit и prompt-injection тестов;
 - нет ограничения длительности аудио;
-- нет offline fallback для extraction;
+- нет локального автоматического extractor; ручной структурированный fallback есть;
 - нет Python lock-файла.
 
 ## 8. Следующая задача
 
-Следующая задача — F4/F6/F7/F8 пользовательского пути. После неё —
-согласованные даты демосценария и настоящий голосовой E2E. F2/F3/F9 и
-текстовый provenance завершены с указанными выше ограничениями. К новым
-функциям, микрофону/ASR и изменениям frozen research-v2 не переходим.
+Следующая задача — согласовать даты/момент анализа demo, затем выполнить
+настоящий голосовой E2E по утверждённому плану. В текущем блоке это не начиналось.
+F1–F10 исправлены с представленными проверками и указанными legacy-ограничениями.
+Исследовательские результаты research-v2 остаются frozen и описательными.
 
 ## 9. Известные ограничения и технический долг
 

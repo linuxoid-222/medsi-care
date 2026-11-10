@@ -22,7 +22,8 @@ def utc(value: datetime) -> datetime:
 def fact_provenance(fact: SymptomFact, *, rule_version: str, resolution: str) -> dict:
     return {
         "check_in_id": fact.check_in_id, "fact_id": fact.id,
-        "text_revision": fact.text_revision, "category": fact.category,
+        "text_revision": fact.text_revision, "facts_revision": fact.facts_revision,
+        "category": fact.category,
         "polarity": fact.polarity, "evidence": fact.evidence,
         "temporal_context": fact.temporal_context,
         "recorded_at": utc(fact.recorded_at).isoformat() if fact.recorded_at else None,
