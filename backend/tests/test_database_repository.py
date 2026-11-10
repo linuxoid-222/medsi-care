@@ -25,6 +25,7 @@ class DatabaseRepositoryTests(TestCase):
                 value=8.0,
                 unit="hours",
                 measured_at=measured_at,
+                quality="good",
             )
             check_in = CheckInRecord(
                 id="checkin-db-1",
@@ -81,3 +82,19 @@ class DatabaseRepositoryTests(TestCase):
             self.assertEqual(len(notifications), 1)
             marked = store.mark_notification_read(notifications[0].id, "demo-caregiver")
             self.assertEqual(marked.status, "read")
+
+            safety_event = MonitoringEvent(
+                status=MonitoringStatus.SAFETY,
+                metric=None,
+                z_score=None,
+                evidence=("chest_pain: боль в груди",),
+                message="Обратитесь за экстренной медицинской помощью.",
+                algorithm_version="safety-v1",
+                level="safety",
+                period_start=measured_at,
+                period_end=measured_at,
+            )
+            store.save_monitoring_event("profile-demo", safety_event)
+            saved_events = store.list_monitoring_events("profile-demo")
+            self.assertEqual(saved_events[0].event.status, MonitoringStatus.SAFETY)
+            self.assertEqual(len(store.list_notifications("demo-caregiver")), 2)

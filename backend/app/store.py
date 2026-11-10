@@ -133,7 +133,7 @@ class InMemoryStore:
             created_at=now,
         )
         self.monitoring_events.append(record)
-        if event.status.value in {"attention", "insufficient_data"}:
+        if event.status.value in {"attention", "insufficient_data", "safety"}:
             for recipient_id in ("demo-user", "demo-caregiver"):
                 self.notifications.append(
                     NotificationRecord(

@@ -1,4 +1,4 @@
-"""Baseline A/B and deterministic multimodal Method C."""
+"""Numeric baselines and text-aware Method C without label leakage."""
 
 from __future__ import annotations
 
@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from statistics import median
 from typing import Iterable
 
-from experiments.synthetic import DayRecord
+from experiments.extractor import DeterministicRuExtractor, ExtractorResult, FactExtractor
+from experiments.synthetic import DayRecord, GroundTruthFact
+
+
+NUMERIC_RULES_VERSION = "numeric-rules-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +20,10 @@ class Prediction:
     method: str
     attention: bool
     insufficient_data: bool
-    target_event: bool
+    ground_truth_event: bool
+    scenario_type: str
+    change_start_day: int | None
+    ground_truth_facts: tuple[GroundTruthFact, ...]
 
 
 def _values(history: Iterable[DayRecord], attribute: str) -> list[float]:
@@ -62,17 +69,45 @@ def baseline_b(history: list[DayRecord], current: DayRecord) -> tuple[bool, bool
     return any(abs(score) >= 2.5 for score in available), False
 
 
-def method_c(history: list[DayRecord], current: DayRecord) -> tuple[bool, bool]:
+def method_c(
+    history: list[DayRecord],
+    current: DayRecord,
+    *,
+    extracted: ExtractorResult,
+) -> tuple[bool, bool]:
+    """Combine numeric history with independently extracted current text facts."""
+
     numeric_attention, insufficient = baseline_b(history, current)
     if insufficient:
         return False, True
-    return numeric_attention or current.symptom_present, False
+    text_attention = any(
+        fact.category == "weakness" and fact.polarity == "present"
+        for fact in extracted.facts
+    )
+    # Quality/completeness is an observable input. Explicit uncertainty and
+    # absent facts never become a positive symptom signal.
+    usable_text = current.quality in {"good", "questionable"} and current.completeness > 0
+    return numeric_attention or (text_attention and usable_text), False
 
 
-def predict(dataset_records: Iterable[DayRecord], method: str) -> list[Prediction]:
+def method_c_no_text(history: list[DayRecord], current: DayRecord) -> tuple[bool, bool]:
+    """Ablation: same numeric personal baseline, with text excluded."""
+
+    return baseline_b(history, current)
+
+
+def predict(
+    dataset_records: Iterable[DayRecord],
+    method: str,
+    *,
+    extractor: FactExtractor | None = None,
+) -> list[Prediction]:
+    """Predict using observable records; hidden labels are attached only for evaluation."""
+
     by_profile: dict[str, list[DayRecord]] = {}
     for row in dataset_records:
         by_profile.setdefault(row.profile_id, []).append(row)
+    active_extractor = extractor or DeterministicRuExtractor()
     result: list[Prediction] = []
     for profile_id, rows in by_profile.items():
         rows.sort(key=lambda row: row.day_index)
@@ -82,8 +117,11 @@ def predict(dataset_records: Iterable[DayRecord], method: str) -> list[Predictio
                 attention, insufficient = baseline_a(current)
             elif method == "baseline_b":
                 attention, insufficient = baseline_b(history, current)
+            elif method == "method_c_no_text":
+                attention, insufficient = method_c_no_text(history, current)
             elif method == "method_c":
-                attention, insufficient = method_c(history, current)
+                extracted = active_extractor.extract(current.check_in_text)
+                attention, insufficient = method_c(history, current, extracted=extracted)
             else:
                 raise ValueError(f"Unknown method: {method}")
             result.append(
@@ -93,7 +131,10 @@ def predict(dataset_records: Iterable[DayRecord], method: str) -> list[Predictio
                     method=method,
                     attention=attention,
                     insufficient_data=insufficient,
-                    target_event=current.target_event,
+                    ground_truth_event=current.ground_truth_event,
+                    scenario_type=current.scenario_type,
+                    change_start_day=current.change_start_day,
+                    ground_truth_facts=current.ground_truth_facts,
                 )
             )
     return result

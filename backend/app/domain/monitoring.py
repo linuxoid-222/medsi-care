@@ -21,6 +21,7 @@ class MonitoringStatus(StrEnum):
     NO_CHANGE = "no_change"
     ATTENTION = "attention"
     INSUFFICIENT_DATA = "insufficient_data"
+    SAFETY = "safety"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,7 @@ class Observation:
     unit: str
     measured_at: datetime
     source: str = "manual"
+    quality: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +83,56 @@ _UNITS: dict[Metric, str] = {
     Metric.DIASTOLIC_BP: "mmHg",
 }
 
+# These are technical bounds for the synthetic demo prototype. They are not
+# medical reference ranges and must not be presented as clinical guidance.
+TECHNICAL_RANGES: dict[Metric, tuple[float, float]] = {
+    Metric.SLEEP_HOURS: (0.0, 24.0),
+    Metric.ACTIVITY_MINUTES: (0.0, 1440.0),
+    Metric.PULSE_BPM: (20.0, 250.0),
+    Metric.SYSTOLIC_BP: (50.0, 250.0),
+    Metric.DIASTOLIC_BP: (30.0, 150.0),
+}
+
+OBSERVATION_SOURCES = frozenset({"manual", "simulator"})
+OBSERVATION_QUALITIES = frozenset({"unknown", "good", "questionable"})
+
 
 def expected_unit(metric: Metric) -> str:
     return _UNITS[metric]
+
+
+def validate_observation_fields(
+    metric: Metric,
+    value: float,
+    unit: str,
+    measured_at: datetime,
+    *,
+    source: str = "manual",
+    quality: str = "unknown",
+    now: datetime | None = None,
+) -> None:
+    """Validate technical invariants before an observation enters storage."""
+
+    if unit != expected_unit(metric):
+        raise ValueError(f"unit must be {expected_unit(metric)} for {metric.value}")
+    lower, upper = TECHNICAL_RANGES[metric]
+    if not lower <= value <= upper:
+        raise ValueError(f"value for {metric.value} must be between {lower:g} and {upper:g}")
+    if source not in OBSERVATION_SOURCES:
+        raise ValueError("source must be manual or simulator")
+    if quality not in OBSERVATION_QUALITIES:
+        raise ValueError("quality must be unknown, good, or questionable")
+    normalized = _utc(measured_at)
+    reference = _utc(now or datetime.now(timezone.utc))
+    if normalized > reference:
+        raise ValueError("measured_at cannot be in the future")
+
+
+def validate_pressure_pair(systolic: float, diastolic: float) -> None:
+    """Validate technical ordering when both pressure values share a timestamp."""
+
+    if systolic <= diastolic:
+        raise ValueError("systolic pressure must be greater than diastolic pressure")
 
 
 def _utc(value: datetime) -> datetime:

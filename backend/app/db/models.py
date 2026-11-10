@@ -33,6 +33,7 @@ class ObservationModel(Base):
     unit: Mapped[str] = mapped_column(String(16), nullable=False)
     measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
+    quality: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown", server_default="unknown")
     profile: Mapped[ProfileModel] = relationship(back_populates="observations")
 
 

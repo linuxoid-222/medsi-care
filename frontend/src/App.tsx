@@ -78,6 +78,18 @@ type Notification = {
 
 const profileId = "profile-demo";
 
+async function describeApiError(response: Response, fallback: string): Promise<string> {
+  const payload = await response.json().catch(() => null);
+  if (response.status === 403) return "Недостаточно прав для этого действия";
+  if (response.status === 422) {
+    const detail = payload?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && detail[0]?.msg) return String(detail[0].msg);
+    return "Проверьте значения и формат данных";
+  }
+  return typeof payload?.detail === "string" ? payload.detail : fallback;
+}
+
 export function App() {
   const [metric, setMetric] = useState("sleep_hours");
   const [unit, setUnit] = useState("hours");
@@ -102,6 +114,7 @@ export function App() {
   const [activeCheckIn, setActiveCheckIn] = useState<CheckIn | null>(null);
   const [factText, setFactText] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
+  const [safetyMessage, setSafetyMessage] = useState("");
 
   async function apiFetch(path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
@@ -160,6 +173,7 @@ export function App() {
     }
     else void apiFetch(`/api/v1/caregiver/profiles/${profileId}/summary`).then(async (response) => {
       if (response.ok) setCaregiverSummary(await response.json());
+      else setError(await describeApiError(response, "Не удалось загрузить обзор доверенного лица"));
     });
   }, [user]);
 
@@ -181,7 +195,7 @@ export function App() {
       }),
     });
     if (!response.ok) {
-      setError("Не удалось сохранить измерение");
+      setError(await describeApiError(response, "Не удалось сохранить измерение"));
       return;
     }
     await loadObservations();
@@ -199,7 +213,7 @@ export function App() {
       body: JSON.stringify({ text: valueToSave }),
     });
     if (!response.ok) {
-      setError("Не удалось сохранить запись");
+      setError(await describeApiError(response, "Не удалось сохранить запись"));
       return null;
     }
     setText("");
@@ -219,7 +233,7 @@ export function App() {
     setError("");
     const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/extract`, { method: "POST" });
     if (!response.ok) {
-      setError("Не удалось извлечь факты. Проверьте настройки GigaChat.");
+      setError(await describeApiError(response, "Не удалось извлечь факты. Проверьте настройки GigaChat."));
       return;
     }
     const payload = await response.json();
@@ -234,7 +248,7 @@ export function App() {
       body: JSON.stringify({ corrected_text: factText }),
     });
     if (!response.ok) {
-      setError("Не удалось сохранить исправленный текст");
+      setError(await describeApiError(response, "Не удалось сохранить исправленный текст"));
       return;
     }
     setActiveCheckIn(await response.json());
@@ -253,10 +267,12 @@ export function App() {
       }),
     });
     if (!response.ok) {
-      setError("Доказательство факта должно присутствовать в подтверждённом тексте");
+      setError(await describeApiError(response, "Доказательство факта должно присутствовать в подтверждённом тексте"));
       return;
     }
-    setFacts((await response.json()).facts);
+    const payload = await response.json();
+    setFacts(payload.facts);
+    setSafetyMessage(payload.safety_event?.message ?? "");
     setError("");
   }
 
@@ -317,7 +333,7 @@ export function App() {
       method: "POST",
     });
     if (response.ok) setAnalysis(await response.json());
-    else setError("Для анализа нужно добавить хотя бы одно измерение");
+    else setError(await describeApiError(response, "Для анализа нужно добавить хотя бы одно измерение"));
   }
 
   async function markNotificationRead(notificationId: string) {
@@ -359,6 +375,7 @@ export function App() {
         <section className="card">
           <h2>{caregiverSummary?.profile.display_name ?? "Обзор профиля"}</h2>
           <p>Режим: только просмотр · данные синтетические</p>
+          {error && <p className="error">{error}</p>}
           {!caregiverSummary ? <p>Загрузка обзора…</p> : <>
             <h3>Последний анализ</h3>
             {caregiverSummary.latest_analysis ? <div className={`result result-${caregiverSummary.latest_analysis.status}`}><strong>{caregiverSummary.latest_analysis.message}</strong><p>{caregiverSummary.latest_analysis.evidence.join(" · ")}</p></div> : <p>Пока нет анализа.</p>}
@@ -446,6 +463,7 @@ export function App() {
               <select value={fact.polarity} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, polarity: event.target.value as Fact["polarity"] } : item))}><option value="present">есть</option><option value="absent">нет</option><option value="uncertain">неясно</option></select>
               <input value={fact.evidence} onChange={(event) => setFacts((items) => items.map((item, i) => i === index ? { ...item, evidence: event.target.value } : item))} />
             </div>)}
+            {safetyMessage && <div className="result result-safety"><strong>{safetyMessage}</strong></div>}
             {facts.length > 0 && <button type="button" onClick={() => void confirmFacts()}>Подтвердить факты</button>}
           </>}
         </section>

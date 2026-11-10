@@ -32,10 +32,14 @@ from app.ai.gigachat import (
 from app.domain.monitoring import (
     Metric,
     Observation,
+    MonitoringEvent,
+    MonitoringStatus,
     analyze_observation,
     calculate_baseline,
     expected_unit,
+    validate_pressure_pair,
 )
+from app.safety import evaluate_safety
 from app.schemas import (
     AnalysisResponse,
     CaregiverSummaryResponse,
@@ -218,7 +222,30 @@ def create_observation(profile_id: str, payload: ObservationCreate, user: Curren
         unit=payload.unit,
         measured_at=measured_at.astimezone(timezone.utc),
         source=payload.source,
+        quality=payload.quality,
     )
+    if payload.metric in {Metric.SYSTOLIC_BP, Metric.DIASTOLIC_BP}:
+        counterpart_metric = (
+            Metric.DIASTOLIC_BP if payload.metric == Metric.SYSTOLIC_BP else Metric.SYSTOLIC_BP
+        )
+        counterpart = next(
+            (
+                item
+                for item in store.list_observations(profile_id)
+                if item.metric == counterpart_metric and item.measured_at == observation.measured_at
+            ),
+            None,
+        )
+        if counterpart is not None:
+            systolic = observation.value if observation.metric == Metric.SYSTOLIC_BP else counterpart.value
+            diastolic = observation.value if observation.metric == Metric.DIASTOLIC_BP else counterpart.value
+            try:
+                validate_pressure_pair(systolic, diastolic)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=str(exc),
+                ) from exc
     return store.add_observation(observation)
 
 
@@ -427,10 +454,27 @@ def confirm_check_in_facts(
         corrected_text=payload.corrected_text or check_in.corrected_text,
         facts=facts,
     )
+    safety_decision = evaluate_safety(facts)
+    safety_event_response = None
+    if safety_decision is not None:
+        now = datetime.now(timezone.utc)
+        safety_event = MonitoringEvent(
+            status=MonitoringStatus.SAFETY,
+            metric=None,
+            z_score=None,
+            evidence=safety_decision.evidence,
+            message=safety_decision.message,
+            algorithm_version=safety_decision.rule_version,
+            level=safety_decision.level,
+            period_start=check_in.created_at,
+            period_end=now,
+        )
+        safety_event_response = _event_response(store.save_monitoring_event(profile_id, safety_event))
     return CheckInConfirmResponse(
         status="confirmed",
         check_in_id=check_in_id,
         facts=[_fact_response(fact) for fact in facts],
+        safety_event=safety_event_response,
     )
 
 

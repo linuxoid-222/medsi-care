@@ -56,6 +56,7 @@ class DatabaseStore:
                     unit=observation.unit,
                     measured_at=observation.measured_at,
                     source=observation.source,
+                    quality=observation.quality,
                 )
             )
             session.commit()
@@ -77,6 +78,7 @@ class DatabaseStore:
                     unit=row.unit,
                     measured_at=_as_utc(row.measured_at),
                     source=row.source,
+                    quality=row.quality,
                 )
                 for row in rows
             ]
@@ -233,7 +235,7 @@ class DatabaseStore:
                     created_at=now,
                 )
             )
-            if event.status.value in {"attention", "insufficient_data"}:
+            if event.status.value in {"attention", "insufficient_data", "safety"}:
                 for recipient_id in ("demo-user", "demo-caregiver"):
                     session.add(
                         NotificationModel(

@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.monitoring import Metric, MonitoringStatus
+from app.domain.monitoring import Metric, MonitoringStatus, validate_observation_fields
 
 
 class LoginRequest(BaseModel):
@@ -46,11 +46,27 @@ class ObservationCreate(BaseModel):
     unit: str = Field(min_length=1, max_length=16)
     measured_at: datetime
     source: Literal["manual", "simulator"] = "manual"
+    quality: Literal["unknown", "good", "questionable"] = "unknown"
 
     @field_validator("unit")
     @classmethod
     def normalize_unit(cls, value: str) -> str:
         return value.strip()
+
+    @model_validator(mode="after")
+    def validate_technical_constraints(self) -> "ObservationCreate":
+        try:
+            validate_observation_fields(
+                self.metric,
+                self.value,
+                self.unit,
+                self.measured_at,
+                source=self.source,
+                quality=self.quality,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
 
 
 class ObservationResponse(BaseModel):
@@ -63,6 +79,7 @@ class ObservationResponse(BaseModel):
     unit: str
     measured_at: datetime
     source: str
+    quality: str
 
 
 class CheckInCreate(BaseModel):
@@ -152,6 +169,7 @@ class CheckInConfirmResponse(BaseModel):
     status: Literal["confirmed"]
     check_in_id: str
     facts: list[SymptomFactResponse]
+    safety_event: "MonitoringEventResponse | None" = None
 
 
 class TranscriptionResponse(BaseModel):
