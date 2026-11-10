@@ -16,7 +16,9 @@ def verify(path: Path) -> None:
         if actual != expected:
             raise ValueError(f"source fingerprint differs: {name}; use the archived commit")
     config = report["config"]
-    recomputed = run(config["profile_count"], config["days"], report["seed"], config["test_fraction"])
+    recomputed = json.loads(json.dumps(run(
+        config["profile_count"], config["days"], report["seed"], config["test_fraction"]
+    )))
     expected = {key: value for key, value in report.items() if key != "provenance"}
     if recomputed != expected:
         raise ValueError("recomputed result differs from archive")

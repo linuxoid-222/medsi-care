@@ -1,14 +1,16 @@
 from dataclasses import fields, replace
 import subprocess
 import sys
+import json
 
 import pytest
 
 from experiments.inputs import MethodInput
 from experiments.methods import Prediction, predict
 from experiments.metrics import evaluate
-from experiments.run_experiment import run
+from experiments.run_experiment import run, source_provenance
 from experiments.synthetic import generate_dataset
+from experiments.verify_report import verify
 
 
 def test_future_mutation_and_prefix_do_not_change_earlier_predictions():
@@ -76,3 +78,15 @@ def test_archive_cli_refuses_to_overwrite_existing_file(tmp_path):
     assert result.returncode != 0
     assert "archive already exists" in result.stderr
     assert target.read_text() == "preserve"
+
+
+def test_saved_json_can_be_recomputed_and_checked(tmp_path):
+    report = run(4, 16, 42, 0.25)
+    report["provenance"] = source_provenance(require_clean=False)
+    target = tmp_path / "report.json"
+    target.write_text(json.dumps(report))
+    verify(target)
+    report["metrics"][0]["false_positives"] += 1
+    target.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="differs from archive"):
+        verify(target)
