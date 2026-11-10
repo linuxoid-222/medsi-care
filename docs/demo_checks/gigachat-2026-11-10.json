@@ -1,0 +1,20 @@
+{
+  "synthetic": true,
+  "model": "GigaChat-2",
+  "live_extraction": "passed",
+  "fact_count": 2,
+  "schema_and_evidence_validation": "passed",
+  "facts_remain_unconfirmed": true,
+  "persistence": "not exercised by adapter smoke",
+  "live_invalid_model": {
+    "result": "passed",
+    "status_code": 404
+  },
+  "induced_live_transport_timeout": "passed",
+  "checked_at_utc": "2026-11-10T18:23:37.070653+00:00",
+  "git_commit": "61b8f790bf17f877926f3f451e755ce5c533012e",
+  "adapter_sha256": "3e233f0527ca021e01835bdb123f8226daf903a2afb094261e5efec088bf877d",
+  "script_sha256": "565bc3d23b0337e6a62afdb33972e11085641678d9d9617cb6da0515e74ef331",
+  "working_tree_dirty": true,
+  "provider_values_not_reproducible": true
+}

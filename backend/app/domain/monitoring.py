@@ -7,6 +7,11 @@ from datetime import date, datetime, timedelta, timezone
 from enum import StrEnum
 from statistics import median
 from typing import Iterable
+from zoneinfo import ZoneInfo
+
+
+DEFAULT_PROFILE_TIMEZONE = "Europe/Moscow"
+NUMERIC_RULE_VERSION = "daily-multimetric-v2"
 
 
 class Metric(StrEnum):
@@ -55,6 +60,11 @@ class Baseline:
     sample_count: int
     window_start: date
     window_end: date
+    timezone: str = DEFAULT_PROFILE_TIMEZONE
+    source_observation_ids: tuple[str, ...] = ()
+    days: tuple[date, ...] = ()
+    aggregation: str = "latest_daily_value"
+    quality: str = "unknown"
 
     @property
     def is_ready(self) -> bool:
@@ -73,6 +83,7 @@ class MonitoringEvent:
     source_observation_ids: tuple[str, ...] = ()
     period_start: datetime | None = None
     period_end: datetime | None = None
+    analysis_details: dict | None = None
 
 
 _UNITS: dict[Metric, str] = {
@@ -148,18 +159,17 @@ def calculate_baseline(
     as_of: datetime,
     window_days: int = 14,
     min_samples: int = 7,
+    profile_timezone: str = DEFAULT_PROFILE_TIMEZONE,
 ) -> Baseline:
-    """Calculate a robust personal baseline without medical thresholds."""
-
-    end = _utc(as_of).date()
-    start = end - timedelta(days=window_days - 1)
-    values = [
-        obs.value
-        for obs in observations
-        if obs.metric == metric
-        and start <= _utc(obs.measured_at).date() <= end
-        and obs.unit == expected_unit(metric)
-    ]
+    """Use valid daily aggregates from [D-window_days, D), in profile time."""
+    if window_days < 1 or min_samples < 1:
+        raise ValueError("window_days and min_samples must be positive")
+    current_day = _utc(as_of).astimezone(ZoneInfo(profile_timezone)).date()
+    start = current_day - timedelta(days=window_days)
+    end = current_day - timedelta(days=1)
+    points = [point for point in aggregate_daily(observations, metric, as_of=as_of,
+              profile_timezone=profile_timezone) if start <= point.day <= end]
+    values = [point.value for point in points]
     center = median(values) if len(values) >= min_samples else None
     mad = median([abs(value - center) for value in values]) if center is not None else None
 
@@ -179,6 +189,147 @@ def calculate_baseline(
         sample_count=len(values),
         window_start=start,
         window_end=end,
+        timezone=profile_timezone,
+        source_observation_ids=tuple(sorted({id for point in points for id in point.observation_ids})),
+        days=tuple(point.day for point in points),
+        aggregation=daily_aggregation(metric),
+        quality="unknown" if any(point.quality == "unknown" for point in points) or not points else "good",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DailyObservation:
+    metric: Metric
+    day: date
+    measured_at: datetime
+    value: float
+    observation_ids: tuple[str, ...]
+    quality: str
+
+
+def daily_aggregation(metric: Metric) -> str:
+    # Sleep/activity are already daily totals, not additive interval samples.
+    return "latest_daily_value" if metric in {Metric.SLEEP_HOURS, Metric.ACTIVITY_MINUTES} else "daily_median"
+
+
+def valid_numeric(observation: Observation, *, as_of: datetime) -> bool:
+    if observation.quality == "questionable":
+        return False
+    try:
+        validate_observation_fields(
+            observation.metric, observation.value, observation.unit,
+            observation.measured_at, source=observation.source,
+            quality=observation.quality, now=as_of,
+        )
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def aggregate_daily(
+    observations: Iterable[Observation], metric: Metric, *, as_of: datetime,
+    profile_timezone: str = DEFAULT_PROFILE_TIMEZONE,
+) -> list[DailyObservation]:
+    """One order-independent value per local day, with source IDs."""
+    zone = ZoneInfo(profile_timezone)
+    by_day: dict[date, list[Observation]] = {}
+    for observation in observations:
+        if observation.metric == metric and valid_numeric(observation, as_of=as_of):
+            day = _utc(observation.measured_at).astimezone(zone).date()
+            by_day.setdefault(day, []).append(observation)
+    result = []
+    for day, rows in sorted(by_day.items()):
+        latest = max(_utc(row.measured_at) for row in rows)
+        used = [row for row in rows if _utc(row.measured_at) == latest] if daily_aggregation(metric) == "latest_daily_value" else rows
+        result.append(DailyObservation(
+            metric, day, latest, float(median(row.value for row in used)),
+            tuple(sorted({row.id for row in used})),
+            "unknown" if any(row.quality == "unknown" for row in used) else "good",
+        ))
+    return result
+
+
+def baseline_details(baseline: Baseline) -> dict:
+    return {
+        "metric": baseline.metric.value, "center": baseline.center,
+        "mad": baseline.mad, "scale": baseline.scale,
+        "sample_count": baseline.sample_count,
+        "window_start": baseline.window_start.isoformat(),
+        "window_end": baseline.window_end.isoformat(), "timezone": baseline.timezone,
+        "days": [day.isoformat() for day in baseline.days],
+        "source_observation_ids": list(baseline.source_observation_ids),
+        "aggregation": baseline.aggregation, "quality": baseline.quality,
+    }
+
+
+def analyze_metrics(
+    observations: Iterable[Observation], *, as_of: datetime,
+    profile_timezone: str = DEFAULT_PROFILE_TIMEZONE,
+    symptom_facts: Iterable[SymptomFact] = (),
+) -> MonitoringEvent:
+    """Analyze every supported metric on local day D, with a UTC cutoff."""
+    rows = list(observations)
+    cutoff = _utc(as_of)
+    zone = ZoneInfo(profile_timezone)
+    day = cutoff.astimezone(zone).date()
+    start = datetime.combine(day, datetime.min.time(), tzinfo=zone).astimezone(timezone.utc)
+    metrics, evidence = [], []
+    used_ids: set[str] = set()
+    for metric in Metric:
+        baseline = calculate_baseline(rows, metric, as_of=cutoff, profile_timezone=profile_timezone)
+        current = next((point for point in aggregate_daily(rows, metric, as_of=cutoff,
+                       profile_timezone=profile_timezone) if point.day == day), None)
+        excluded = sorted({row.id for row in rows if row.metric == metric
+                           and baseline.window_start <= _utc(row.measured_at).astimezone(zone).date() <= day
+                           and not valid_numeric(row, as_of=cutoff)})
+        z = None
+        status = "missing_measurement"
+        if current is not None:
+            status = "insufficient_data"
+            if baseline.is_ready:
+                assert baseline.center is not None and baseline.scale is not None
+                z = (current.value - baseline.center) / baseline.scale
+                status = "attention" if abs(z) >= 2.5 else "no_change"
+            used_ids.update(current.observation_ids)
+            used_ids.update(baseline.source_observation_ids)
+        detail = {
+            "metric": metric.value, "status": status,
+            "value": current.value if current else None, "unit": expected_unit(metric),
+            "measured_at": current.measured_at.isoformat() if current else None,
+            "day": day.isoformat(), "quality": current.quality if current else "missing",
+            "z_score": z, "baseline": baseline_details(baseline),
+            "source_observation_ids": list(current.observation_ids) if current else [],
+            "excluded_observation_ids": excluded,
+        }
+        metrics.append(detail)
+        evidence.append(f"{metric.value}: {status}" + (
+            f"; value={current.value:g} {expected_unit(metric)}; sample_days={baseline.sample_count}"
+            + (f"; baseline={baseline.center:g}; z={z:.2f}" if z is not None else "")
+            if current else ""
+        ))
+    statuses = [item["status"] for item in metrics]
+    status = (MonitoringStatus.ATTENTION if "attention" in statuses else
+              MonitoringStatus.INSUFFICIENT_DATA if "insufficient_data" in statuses else
+              MonitoringStatus.NO_CHANGE if "no_change" in statuses else MonitoringStatus.INSUFFICIENT_DATA)
+    # Preserve the existing fact behavior for now. F2/F3/F9 and textual
+    # provenance are explicitly a separate, unfinished work block.
+    facts = [fact for fact in symptom_facts if fact.confirmed and fact.polarity == "present"]
+    if facts and any(item["z_score"] is not None for item in metrics):
+        status = MonitoringStatus.ATTENTION
+        evidence.extend(f"symptom:{fact.category}" for fact in facts)
+    messages = {
+        MonitoringStatus.ATTENTION: "Обнаружено изменение, заслуживающее внимания. Проверьте результаты отдельных показателей.",
+        MonitoringStatus.NO_CHANGE: "Среди доступных для сравнения показателей значимого изменения не обнаружено.",
+        MonitoringStatus.INSUFFICIENT_DATA: "Для части показателей недостаточно дневной истории или нет актуальных измерений.",
+    }
+    return MonitoringEvent(
+        status, None, None, tuple(evidence), messages[status],
+        algorithm_version=NUMERIC_RULE_VERSION, level="normal" if status == MonitoringStatus.NO_CHANGE else status.value,
+        source_observation_ids=tuple(sorted(used_ids)), period_start=start, period_end=cutoff,
+        analysis_details={"as_of": cutoff.isoformat(), "timezone": profile_timezone,
+                          "period_start": start.isoformat(), "period_end": cutoff.isoformat(),
+                          "data_complete": all(item == "no_change" or item == "attention" for item in statuses),
+                          "metrics": metrics},
     )
 
 

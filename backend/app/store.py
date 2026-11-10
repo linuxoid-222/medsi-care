@@ -42,6 +42,7 @@ class NotificationRecord:
 
 class InMemoryStore:
     def __init__(self) -> None:
+        self.profile_timezones = {"profile-demo": "Europe/Moscow"}
         self.observations: list[Observation] = []
         self.check_ins: list[CheckInRecord] = []
         self.symptom_facts: dict[str, list[SymptomFact]] = {}
@@ -51,6 +52,9 @@ class InMemoryStore:
     def add_observation(self, observation: Observation) -> Observation:
         self.observations.append(observation)
         return observation
+
+    def get_profile_timezone(self, profile_id: str) -> str:
+        return self.profile_timezones[profile_id]
 
     def list_observations(self, profile_id: str) -> list[Observation]:
         return sorted(

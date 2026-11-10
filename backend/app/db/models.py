@@ -16,6 +16,7 @@ class ProfileModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     data_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="synthetic")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Europe/Moscow", server_default="Europe/Moscow")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     observations: Mapped[list["ObservationModel"]] = relationship(back_populates="profile")
     check_ins: Mapped[list["CheckInModel"]] = relationship(back_populates="profile")
@@ -88,6 +89,7 @@ class MonitoringEventModel(Base):
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ruleset_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    analysis_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 

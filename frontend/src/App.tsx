@@ -115,6 +115,7 @@ export function App() {
   const [factText, setFactText] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
   const [safetyMessage, setSafetyMessage] = useState("");
+  const [extractionFallback, setExtractionFallback] = useState(false);
 
   async function apiFetch(path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
@@ -220,6 +221,9 @@ export function App() {
     const saved = await response.json();
     setActiveCheckIn(saved);
     setFactText(saved.corrected_text ?? saved.text);
+    setFacts([]);
+    setSafetyMessage("");
+    setExtractionFallback(false);
     return saved;
   }
 
@@ -231,13 +235,22 @@ export function App() {
   async function extractFacts() {
     if (!activeCheckIn) return;
     setError("");
-    const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/extract`, { method: "POST" });
-    if (!response.ok) {
-      setError(await describeApiError(response, "Не удалось извлечь факты. Проверьте настройки GigaChat."));
-      return;
+    try {
+      const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins/${activeCheckIn.id}/extract`, { method: "POST" });
+      if (!response.ok) {
+        setExtractionFallback(response.status === 502 || response.status === 503);
+        setError(response.status === 502 || response.status === 503
+          ? "Автоматическое извлечение фактов недоступно. Новые факты не сохранены."
+          : await describeApiError(response, "Не удалось извлечь факты."));
+        return;
+      }
+      const payload = await response.json();
+      setFacts(payload.facts);
+      setExtractionFallback(false);
+    } catch {
+      setExtractionFallback(true);
+      setError("Нет связи с сервером. Проверьте подключение и повторите попытку.");
     }
-    const payload = await response.json();
-    setFacts(payload.facts);
   }
 
   async function saveCorrection() {
@@ -452,6 +465,7 @@ export function App() {
 
         <section className="card">
           <h2>Проверка фактов</h2>
+          {extractionFallback && <p role="status">Резервный режим: автоматическое извлечение отключено для этой попытки. При доступном сервере ручной ввод, история и числовой анализ работают без LLM.</p>}
           {!activeCheckIn ? <p>Сначала сохраните текстовую или голосовую запись.</p> : <>
             <label>Подтверждённый текст<textarea value={factText} onChange={(event) => setFactText(event.target.value)} /></label>
             <div className="button-row">

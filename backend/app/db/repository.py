@@ -62,6 +62,13 @@ class DatabaseStore:
             session.commit()
         return observation
 
+    def get_profile_timezone(self, profile_id: str) -> str:
+        with self.session_factory() as session:
+            row = session.get(ProfileModel, profile_id)
+            if row is None:
+                raise KeyError(profile_id)
+            return row.timezone
+
     def list_observations(self, profile_id: str) -> list[Observation]:
         with self.session_factory() as session:
             rows = session.scalars(
@@ -232,6 +239,7 @@ class DatabaseStore:
                     period_start=event.period_start,
                     period_end=event.period_end,
                     ruleset_version=event.algorithm_version,
+                    analysis_details=event.analysis_details,
                     created_at=now,
                 )
             )
@@ -272,6 +280,7 @@ class DatabaseStore:
                         source_observation_ids=tuple(row.source_observation_ids),
                         period_start=_as_utc(row.period_start) if row.period_start else None,
                         period_end=_as_utc(row.period_end) if row.period_end else None,
+                        analysis_details=row.analysis_details,
                     ),
                     created_at=_as_utc(row.created_at),
                 )

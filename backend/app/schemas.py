@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -187,6 +187,45 @@ class AnalysisResponse(BaseModel):
     evidence: list[str]
     message: str
     algorithm_version: str
+    analysis_details: "NumericAnalysisDetails | None" = None
+
+
+class BaselineResponse(BaseModel):
+    metric: Metric
+    center: float | None
+    mad: float | None
+    scale: float | None
+    sample_count: int
+    window_start: date
+    window_end: date
+    timezone: str
+    days: list[date]
+    source_observation_ids: list[str]
+    aggregation: Literal["latest_daily_value", "daily_median"]
+    quality: Literal["good", "unknown"]
+
+
+class MetricAnalysisResponse(BaseModel):
+    metric: Metric
+    status: Literal["missing_measurement", "insufficient_data", "no_change", "attention"]
+    value: float | None
+    unit: str
+    measured_at: datetime | None
+    day: date
+    quality: Literal["good", "unknown", "missing"]
+    z_score: float | None
+    baseline: BaselineResponse
+    source_observation_ids: list[str]
+    excluded_observation_ids: list[str]
+
+
+class NumericAnalysisDetails(BaseModel):
+    as_of: datetime
+    timezone: str
+    period_start: datetime
+    period_end: datetime
+    data_complete: bool
+    metrics: list[MetricAnalysisResponse]
 
 
 class MonitoringEventResponse(BaseModel):
@@ -203,6 +242,7 @@ class MonitoringEventResponse(BaseModel):
     period_end: datetime | None
     ruleset_version: str
     created_at: datetime
+    analysis_details: NumericAnalysisDetails | None = None
 
 
 class NotificationResponse(BaseModel):
@@ -219,6 +259,10 @@ class TrendPointResponse(BaseModel):
     value: float
     baseline: float | None
     event_ids: list[str]
+    day: date | None = None
+    quality: str = "unknown"
+    source_observation_ids: list[str] = Field(default_factory=list)
+    baseline_details: BaselineResponse | None = None
 
 
 class DemoLoadRequest(BaseModel):

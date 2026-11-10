@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
 from starlette.concurrency import run_in_threadpool
@@ -34,7 +34,9 @@ from app.domain.monitoring import (
     Observation,
     MonitoringEvent,
     MonitoringStatus,
-    analyze_observation,
+    analyze_metrics,
+    aggregate_daily,
+    baseline_details,
     calculate_baseline,
     expected_unit,
     validate_pressure_pair,
@@ -104,41 +106,33 @@ def _event_response(record) -> MonitoringEventResponse:
         period_end=event.period_end,
         ruleset_version=event.algorithm_version,
         created_at=record.created_at,
+        analysis_details=event.analysis_details,
     )
 
 
-def _analysis_for_profile(profile_id: str):
+def _analysis_cutoff(value: datetime | None) -> datetime:
+    now = datetime.now(timezone.utc)
+    value = value or now
+    value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    if value > now:
+        raise HTTPException(status_code=422, detail="as_of cannot be in the future")
+    return value
+
+
+def _analysis_for_profile(profile_id: str, as_of: datetime | None = None):
+    cutoff = _analysis_cutoff(as_of)
     observations = store.list_observations(profile_id)
-    if not observations:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No observations available for analysis",
-        )
-    latest = observations[-1]
-    history = [item for item in observations if item.id != latest.id]
-    relevant_history = [item for item in history if item.metric == latest.metric]
-    baseline = calculate_baseline(relevant_history, latest.metric, as_of=latest.measured_at)
-    facts = [fact for check_in in store.list_check_ins(profile_id) for fact in store.list_symptom_facts(check_in.id)]
-    event = analyze_observation(latest, baseline, symptom_facts=facts)
-    source_observation_ids = tuple(item.id for item in relevant_history + [latest])
-    period_start = min((item.measured_at for item in relevant_history), default=latest.measured_at)
-    level = "normal" if event.status.value == "no_change" else event.status.value
-    event = replace(
-        event,
-        level=level,
-        source_observation_ids=source_observation_ids,
-        period_start=period_start,
-        period_end=latest.measured_at,
+    facts = [fact for check_in in store.list_check_ins(profile_id)
+             for fact in store.list_symptom_facts(check_in.id)]
+    event = analyze_metrics(
+        observations, as_of=cutoff,
+        profile_timezone=store.get_profile_timezone(profile_id), symptom_facts=facts,
     )
-    response = AnalysisResponse(
-        status=event.status,
-        metric=event.metric,
-        z_score=event.z_score,
-        evidence=list(event.evidence),
-        message=event.message,
-        algorithm_version=event.algorithm_version,
-    )
-    return response, event
+    return AnalysisResponse(
+        status=event.status, metric=event.metric, z_score=event.z_score,
+        evidence=list(event.evidence), message=event.message,
+        algorithm_version=event.algorithm_version, analysis_details=event.analysis_details,
+    ), event
 
 
 @app.get("/api/v1/health")
@@ -195,6 +189,7 @@ def profile(profile_id: str, user: CurrentUser) -> dict[str, str]:
         "id": PROFILE_ID,
         "display_name": "Демонстрационный профиль",
         "data_mode": "synthetic",
+        "timezone": store.get_profile_timezone(profile_id),
     }
 
 
@@ -482,10 +477,10 @@ def confirm_check_in_facts(
     "/api/v1/profiles/{profile_id}/analysis",
     response_model=AnalysisResponse,
 )
-def analyze_profile(profile_id: str, user: CurrentUser) -> AnalysisResponse:
+def analyze_profile(profile_id: str, user: CurrentUser, as_of: datetime | None = None) -> AnalysisResponse:
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
-    response, event = _analysis_for_profile(profile_id)
+    response, event = _analysis_for_profile(profile_id, as_of)
     store.save_monitoring_event(profile_id, event)
     return response
 
@@ -509,30 +504,47 @@ def trends(
     user: CurrentUser,
     metric: Metric = Query(Metric.SLEEP_HOURS),
     days: int = Query(28, ge=1, le=90),
+    as_of: datetime | None = None,
 ) -> list[TrendPointResponse]:
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
-    observations = [item for item in store.list_observations(profile_id) if item.metric == metric]
-    observations = observations[-days:]
+    cutoff = _analysis_cutoff(as_of)
+    profile_timezone = store.get_profile_timezone(profile_id)
+    observations = store.list_observations(profile_id)
+    daily = aggregate_daily(observations, metric, as_of=cutoff, profile_timezone=profile_timezone)
+    if not daily:
+        return []
+    # Default viewport ends on the latest available measurement day. An explicit
+    # cutoff selects a historical calendar range ending on that local date.
+    end = cutoff.astimezone(ZoneInfo(profile_timezone)).date() if as_of is not None else daily[-1].day
+    start = end - timedelta(days=days - 1)
     event_records = store.list_monitoring_events(profile_id)
     points: list[TrendPointResponse] = []
-    for index, observation in enumerate(observations):
-        history = observations[:index]
-        baseline = calculate_baseline(history, metric, as_of=observation.measured_at)
-        related_events = [
-            item.id
-            for item in event_records
-            if item.event.metric == metric
-            and (observation.id in item.event.source_observation_ids or item.event.period_end == observation.measured_at)
-        ]
-        points.append(
-            TrendPointResponse(
-                measured_at=observation.measured_at,
-                value=observation.value,
-                baseline=baseline.center,
-                event_ids=related_events,
-            )
-        )
+    for observation in daily:
+        if not start <= observation.day <= end:
+            continue
+        baseline = calculate_baseline(observations, metric, as_of=observation.measured_at,
+                                      profile_timezone=profile_timezone)
+        related_events = []
+        for record in event_records:
+            event = record.event
+            if event.analysis_details is not None:
+                current_ids = {id for item in event.analysis_details["metrics"]
+                               if item["metric"] == metric.value
+                               for id in item["source_observation_ids"]}
+                related = bool(current_ids.intersection(observation.observation_ids))
+            else:
+                related = event.metric == metric and bool(
+                    set(event.source_observation_ids).intersection(observation.observation_ids)
+                )
+            if related:
+                related_events.append(record.id)
+        points.append(TrendPointResponse(
+            measured_at=observation.measured_at, value=observation.value,
+            baseline=baseline.center, event_ids=related_events, day=observation.day,
+            quality=observation.quality, source_observation_ids=list(observation.observation_ids),
+            baseline_details=baseline_details(baseline),
+        ))
     return points
 
 

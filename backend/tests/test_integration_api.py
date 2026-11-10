@@ -167,7 +167,10 @@ class ApiIntegrationTests(TestCase):
                 self.user,
             )
         self.assertEqual(invalid_pressure.exception.status_code, 422)
-        analysis = main.analyze_profile("profile-demo", self.user)
+        # Demo dates are fixed in October: request an explicit historical snapshot.
+        analysis = main.analyze_profile(
+            "profile-demo", self.user, as_of=datetime(2026, 10, 22, 12, tzinfo=timezone.utc),
+        )
         self.assertEqual(analysis.status.value, "attention")
         self.assertGreaterEqual(len(main.store.list_monitoring_events("profile-demo")), 2)
 

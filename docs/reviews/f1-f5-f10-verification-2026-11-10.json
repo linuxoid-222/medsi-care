@@ -1,0 +1,70 @@
+{
+  "synthetic": true,
+  "findings": [
+    "F1",
+    "F5",
+    "F10"
+  ],
+  "checked_at_utc": "2026-11-10T18:48:02.434794+00:00",
+  "migration_0004_to_0005_preserves_legacy_event": "passed",
+  "pytest_with_live_postgres": "64 passed in 1.93s",
+  "live_http_demo_reset_smoke": "passed",
+  "demo_historical_analysis": [
+    {
+      "metric": "sleep_hours",
+      "status": "attention",
+      "value": 5.0,
+      "z_score": -7.5,
+      "baseline": 8.0,
+      "sample_days": 14
+    },
+    {
+      "metric": "activity_minutes",
+      "status": "attention",
+      "value": 25.0,
+      "z_score": -12.307692307692308,
+      "baseline": 65.0,
+      "sample_days": 14
+    },
+    {
+      "metric": "pulse_bpm",
+      "status": "attention",
+      "value": 90.0,
+      "z_score": 5.714285714285714,
+      "baseline": 70.0,
+      "sample_days": 14
+    },
+    {
+      "metric": "systolic_bp",
+      "status": "missing_measurement",
+      "value": null,
+      "z_score": null,
+      "baseline": null,
+      "sample_days": 0
+    },
+    {
+      "metric": "diastolic_bp",
+      "status": "missing_measurement",
+      "value": null,
+      "z_score": null,
+      "baseline": null,
+      "sample_days": 0
+    }
+  ],
+  "research_archive_changed": false,
+  "base_commit": "61b8f790bf17f877926f3f451e755ce5c533012e",
+  "working_tree_dirty": true,
+  "original_black_box_regressions_before_fix": "5 failed (F1 twice, F5 twice, F10 once)",
+  "numeric_regressions_after_fix": "12 passed",
+  "source_sha256": {
+    "backend/app/domain/monitoring.py": "487309dabe7710c8e1dee9e1d39523ba9a579f8bbf2f8c8914bd159c62f97c35",
+    "backend/app/main.py": "3797a31ac3022102350e30ced644da406a3e9bb5115975f623f482b437e3c209",
+    "backend/app/schemas.py": "5ba143c3806f1283ca5b73da582ddfed9b1163b3351b161f23cc1f7de4e3277c",
+    "backend/app/db/models.py": "29348b927c44fd63006d210657a7a0e655086669e49471567d960f4702a2abb6",
+    "backend/app/db/repository.py": "d72de67206bb2968407344d97792e18761f2c1f0450ae42f019cdb3984ace64c",
+    "backend/app/store.py": "ce15259d415ea5cc96cf4573bc8bb246ee5f6f3800711cdf807c5637197c54cd",
+    "backend/alembic/versions/0005_daily_monitoring.py": "0b569cc808e6abcc049127cc892de182e186c44f680bd641c032ca1f5537a460",
+    "backend/tests/test_monitoring_http.py": "5cdd42b1dab941e896ebf7b01a9635a1318b746bb409fc1f2a259e42fdacaa71",
+    "backend/tests/test_monitoring_regressions.py": "78f2089a97698fbdc9ca816cf9e4ec31d5c85926563d77beb22ace7b3248d3fa"
+  }
+}
