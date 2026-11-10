@@ -161,3 +161,25 @@ PYTHONPATH=. .venv/bin/python -m experiments.run_experiment \
 доказательствами. Deterministic extractor — инженерная эвристика, а не
 клинически обученная модель. Старые Method C метрики до протокола `research-v2`
 не используются.
+
+Проверенный архив: `experiments/artifacts/research-v2-seed42-2026-11-10/`.
+Он содержит отдельный `result.json`, исходные количества и все test-предсказания,
+commit/SHA-256 исходников, split и графики PNG/SVG. Это 100 сгенерированных
+профилей, но оценка — только на 20 held-out профилях (560 человеко-дней,
+156 положительных, 404 отрицательных). Повторные положительные дни считаются
+отдельно; задержка усредняется только по обнаруженным эпизодам. Полные
+определения и ограничения — в [docs/RESEARCH.md](docs/RESEARCH.md).
+
+```bash
+.venv/bin/pip install -r experiments/requirements-plot.txt
+.venv/bin/python -m experiments.verify_report \
+  experiments/artifacts/research-v2-seed42-2026-11-10/result.json
+.venv/bin/python -m experiments.plot_results \
+  --result experiments/artifacts/research-v2-seed42-2026-11-10/result.json \
+  --output-dir /tmp/medsi-research-figures-new
+```
+
+Для нового неизменяемого архива: `--archive --output <новый_путь.json>`;
+нужна чистая рабочая копия Git. Существующие архивы не перезаписываются.
+Графики читают только сохранённый JSON. При проверке архива исходники должны
+совпадать с указанным в нём коммитом; `verify_report` проверяет хеши и пересчёт.

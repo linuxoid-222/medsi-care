@@ -1,0 +1,17 @@
+{
+  "result": "experiments/artifacts/research-v2-seed42-2026-11-10/result.json",
+  "result_sha256": "4039c24377ccae929cc2b0c0340b3b0fcdff482f768a56a1b34e04ed8f72ea69",
+  "source_commit": "859b69581327a0f22d7f8ae75605fb83356c1b3e",
+  "matplotlib": "3.10.8",
+  "example_profile_id": "synthetic-056",
+  "example_selection": "lexicographically first held-out multimodal profile; fallback first onset profile",
+  "figures_sha256": {
+    "precision_recall_f1.png": "3a29e9adb6d5a8c77fb008ce66ca2144b8f97c7b9b9c2a2aec8866257b9133e1",
+    "precision_recall_f1.svg": "35706d8fbbf68d147b7e01d05786aec572af4cc749325c24382e215529ca4508",
+    "false_alerts.png": "872d14525d18a907917b985467855c125f3f1aaf6c7798669b0f2a8e5751ebe7",
+    "false_alerts.svg": "3787017e9cf72f0034911643433da07d20d88030349cdde9836d59d41f0dabb8",
+    "timeline.png": "c36deaa25a1888870952a1241c5c222f6d5eb08c72bc5c5093c20ed69548ae90",
+    "timeline.svg": "65edfec6939302696d64670a8f9e67072b0a448bbab685f75f491a2e0f2a9361"
+  },
+  "svg_postprocess": "Trailing whitespace removed from each SVG line for Git; visual content unchanged."
+}
