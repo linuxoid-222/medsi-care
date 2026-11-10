@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import random
 
+from experiments.inputs import MethodInput
+
 
 EXPERIMENT_PROTOCOL_VERSION = "research-v2"
 SCENARIOS = (
@@ -43,10 +45,11 @@ class DayRecord:
     ground_truth_facts: tuple[GroundTruthFact, ...]
     change_start_day: int | None
 
-    @property
-    def completeness(self) -> float:
-        values = (self.sleep_hours, self.activity_minutes, self.pulse_bpm)
-        return sum(value is not None for value in values) / len(values)
+    def observable(self) -> MethodInput:
+        return MethodInput(
+            self.profile_id, self.day_index, self.sleep_hours,
+            self.activity_minutes, self.pulse_bpm, self.check_in_text, self.quality,
+        )
 
 
 @dataclass(frozen=True, slots=True)

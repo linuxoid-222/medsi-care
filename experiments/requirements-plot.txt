@@ -1,0 +1,2 @@
+# Optional research plotting tools; not a backend/runtime dependency.
+matplotlib==3.10.8

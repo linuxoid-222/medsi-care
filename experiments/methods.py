@@ -7,7 +7,7 @@ from statistics import median
 from typing import Iterable
 
 from experiments.extractor import DeterministicRuExtractor, ExtractorResult, FactExtractor
-from experiments.synthetic import DayRecord, GroundTruthFact
+from experiments.inputs import MethodInput
 
 
 NUMERIC_RULES_VERSION = "numeric-rules-v1"
@@ -20,17 +20,13 @@ class Prediction:
     method: str
     attention: bool
     insufficient_data: bool
-    ground_truth_event: bool
-    scenario_type: str
-    change_start_day: int | None
-    ground_truth_facts: tuple[GroundTruthFact, ...]
 
 
-def _values(history: Iterable[DayRecord], attribute: str) -> list[float]:
+def _values(history: Iterable[MethodInput], attribute: str) -> list[float]:
     return [value for row in history if (value := getattr(row, attribute)) is not None]
 
 
-def _z_score(history: list[DayRecord], current: DayRecord, attribute: str) -> float | None:
+def _z_score(history: list[MethodInput], current: MethodInput, attribute: str) -> float | None:
     values = _values(history[-14:], attribute)
     current_value = getattr(current, attribute)
     if len(values) < 7 or current_value is None:
@@ -43,7 +39,7 @@ def _z_score(history: list[DayRecord], current: DayRecord, attribute: str) -> fl
     return (current_value - center) / scale
 
 
-def baseline_a(current: DayRecord) -> tuple[bool, bool]:
+def baseline_a(current: MethodInput) -> tuple[bool, bool]:
     """Fixed experimental thresholds; these are not clinical limits."""
 
     available = [current.sleep_hours, current.activity_minutes, current.pulse_bpm]
@@ -57,7 +53,7 @@ def baseline_a(current: DayRecord) -> tuple[bool, bool]:
     return attention, False
 
 
-def baseline_b(history: list[DayRecord], current: DayRecord) -> tuple[bool, bool]:
+def baseline_b(history: list[MethodInput], current: MethodInput) -> tuple[bool, bool]:
     scores = [
         _z_score(history, current, "sleep_hours"),
         _z_score(history, current, "activity_minutes"),
@@ -70,8 +66,8 @@ def baseline_b(history: list[DayRecord], current: DayRecord) -> tuple[bool, bool
 
 
 def method_c(
-    history: list[DayRecord],
-    current: DayRecord,
+    history: list[MethodInput],
+    current: MethodInput,
     *,
     extracted: ExtractorResult,
 ) -> tuple[bool, bool]:
@@ -90,28 +86,32 @@ def method_c(
     return numeric_attention or (text_attention and usable_text), False
 
 
-def method_c_no_text(history: list[DayRecord], current: DayRecord) -> tuple[bool, bool]:
+def method_c_no_text(history: list[MethodInput], current: MethodInput) -> tuple[bool, bool]:
     """Ablation: same numeric personal baseline, with text excluded."""
 
     return baseline_b(history, current)
 
 
 def predict(
-    dataset_records: Iterable[DayRecord],
+    dataset_records: Iterable[MethodInput],
     method: str,
     *,
     extractor: FactExtractor | None = None,
 ) -> list[Prediction]:
-    """Predict using observable records; hidden labels are attached only for evaluation."""
+    """Predict from observable inputs, using strictly earlier days for history."""
 
-    by_profile: dict[str, list[DayRecord]] = {}
+    by_profile: dict[str, list[MethodInput]] = {}
     for row in dataset_records:
+        if not isinstance(row, MethodInput):
+            raise TypeError("predict accepts MethodInput only, without evaluation labels")
         by_profile.setdefault(row.profile_id, []).append(row)
     active_extractor = extractor or DeterministicRuExtractor()
     result: list[Prediction] = []
     for profile_id, rows in by_profile.items():
         rows.sort(key=lambda row: row.day_index)
         for index, current in enumerate(rows):
+            if index and rows[index - 1].day_index == current.day_index:
+                raise ValueError("duplicate profile/day input")
             history = rows[:index]
             if method == "baseline_a":
                 attention, insufficient = baseline_a(current)
@@ -131,10 +131,6 @@ def predict(
                     method=method,
                     attention=attention,
                     insufficient_data=insufficient,
-                    ground_truth_event=current.ground_truth_event,
-                    scenario_type=current.scenario_type,
-                    change_start_day=current.change_start_day,
-                    ground_truth_facts=current.ground_truth_facts,
                 )
             )
     return result

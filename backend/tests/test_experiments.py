@@ -63,7 +63,7 @@ class ExperimentTests(TestCase):
         dataset = generate_dataset(profile_count=4, days=16, seed=11)
         records = list(dataset.records[:16])
         spy = _SpyExtractor()
-        predictions = predict(records, "method_c", extractor=spy)
+        predictions = predict([row.observable() for row in records], "method_c", extractor=spy)
         self.assertEqual(len(spy.inputs), len(records))
         self.assertEqual(set(spy.inputs), {row.check_in_text for row in records})
         source = inspect.getsource(method_c)
@@ -102,8 +102,8 @@ class ExperimentTests(TestCase):
         )
         extractor = DeterministicRuExtractor()
         self.assertEqual(
-            method_c(history, current_a, extracted=extractor.extract(current_a.check_in_text)),
-            method_c(history, current_b, extracted=extractor.extract(current_b.check_in_text)),
+            method_c([row.observable() for row in history], current_a.observable(), extracted=extractor.extract(current_a.check_in_text)),
+            method_c([row.observable() for row in history], current_b.observable(), extracted=extractor.extract(current_b.check_in_text)),
         )
 
     def test_extractor_metrics_include_negation_and_uncertainty_errors(self) -> None:
