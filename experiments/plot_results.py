@@ -86,7 +86,7 @@ def plot(result_path: Path, output_dir: Path) -> None:
     polarity_codes = {"present": 1, "absent": -1, "uncertain": .5}
     fact_values = [next((polarity_codes[fact["polarity"]] for fact in extracted[day]["facts"]
                          if fact["category"] == "weakness"), 0) for day in days]
-    axes[3].step(days, fact_values, where="mid", color=COLORS[-1])
+    axes[3].step(days, fact_values, where="post", color=COLORS[-1])
     axes[3].set(yticks=[-1, 0, .5, 1], yticklabels=["absent", "none", "uncertain", "present"],
                 ylabel="Text fact", ylim=(-1.25, 1.25))
     for index, row in enumerate(metrics):
