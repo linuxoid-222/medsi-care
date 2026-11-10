@@ -6,8 +6,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import create_engine, select, update, delete
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import and_, create_engine, select, update, delete
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import IntegrityError
 
 from app.event_identity import event_identity, fact_content
@@ -21,7 +21,10 @@ from app.db.models import (
     SymptomFactModel,
 )
 from app.domain.monitoring import Metric, MonitoringEvent, MonitoringStatus, Observation, SymptomFact
-from app.store import CheckInRecord, MonitoringEventRecord, NotificationRecord
+from app.store import (
+    CheckInCreationConflict, CheckInRecord, ConfirmationResult, MonitoringEventRecord,
+    NotificationRecord, confirmation_safety_event,
+)
 from app.facts import TextRevisionConflict
 
 
@@ -29,6 +32,35 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _check_in_record(row: CheckInModel) -> CheckInRecord:
+    return CheckInRecord(
+        id=row.id, profile_id=row.profile_id, text=row.text, source=row.source,
+        created_at=_as_utc(row.created_at), corrected_text=row.corrected_text,
+        text_revision=row.text_revision, facts_revision=row.facts_revision,
+        confirmed_revision=row.confirmed_revision,
+        confirmed_at=_as_utc(row.confirmed_at) if row.confirmed_at else None,
+        creation_key=row.creation_key,
+    )
+
+
+def _check_in_row(record: CheckInRecord) -> CheckInModel:
+    return CheckInModel(
+        id=record.id, profile_id=record.profile_id, text=record.text, source=record.source,
+        created_at=record.created_at, corrected_text=record.corrected_text,
+        text_revision=record.text_revision, facts_revision=record.facts_revision,
+        confirmed_revision=record.confirmed_revision, confirmed_at=record.confirmed_at,
+        creation_key=record.creation_key,
+    )
+
+
+def _observation_row(observation: Observation) -> ObservationModel:
+    return ObservationModel(
+        id=observation.id, profile_id=observation.profile_id, metric=observation.metric.value,
+        value=observation.value, unit=observation.unit, measured_at=observation.measured_at,
+        source=observation.source, quality=observation.quality,
+    )
 
 
 def _event_record(row: MonitoringEventModel) -> MonitoringEventRecord:
@@ -85,18 +117,7 @@ class DatabaseStore:
 
     def add_observation(self, observation: Observation) -> Observation:
         with self.session_factory() as session:
-            session.add(
-                ObservationModel(
-                    id=observation.id,
-                    profile_id=observation.profile_id,
-                    metric=observation.metric.value,
-                    value=observation.value,
-                    unit=observation.unit,
-                    measured_at=observation.measured_at,
-                    source=observation.source,
-                    quality=observation.quality,
-                )
-            )
+            session.add(_observation_row(observation))
             session.commit()
         return observation
 
@@ -130,65 +151,65 @@ class DatabaseStore:
 
     def add_check_in(self, check_in: CheckInRecord) -> CheckInRecord:
         with self.session_factory() as session:
-            session.add(
-                CheckInModel(
-                    id=check_in.id,
-                    profile_id=check_in.profile_id,
-                    text=check_in.text,
-                    source=check_in.source,
-                    created_at=check_in.created_at,
-                    corrected_text=check_in.corrected_text,
-                    text_revision=check_in.text_revision, facts_revision=check_in.facts_revision,
-                    confirmed_revision=check_in.confirmed_revision,
-                    confirmed_at=check_in.confirmed_at,
-                )
-            )
-            session.commit()
+            session.add(_check_in_row(check_in))
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                if check_in.creation_key is None:
+                    raise
+                original = session.scalar(select(CheckInModel).where(
+                    CheckInModel.profile_id == check_in.profile_id,
+                    CheckInModel.creation_key == check_in.creation_key,
+                ))
+                if original is None:
+                    raise
+                if (original.text, original.source) != (check_in.text, check_in.source):
+                    raise CheckInCreationConflict() from None
+                return _check_in_record(original)
         return check_in
 
     def list_check_ins(self, profile_id: str) -> list[CheckInRecord]:
         with self.session_factory() as session:
-            rows = session.scalars(
-                select(CheckInModel)
-                .where(CheckInModel.profile_id == profile_id)
-                .order_by(CheckInModel.created_at.desc())
-            ).all()
-            return [
-                CheckInRecord(
-                    id=row.id,
-                    profile_id=row.profile_id,
-                    text=row.text,
-                    source=row.source,
-                    created_at=_as_utc(row.created_at),
-                    corrected_text=row.corrected_text,
-                    text_revision=row.text_revision, facts_revision=row.facts_revision,
-                    confirmed_revision=row.confirmed_revision,
-                    confirmed_at=_as_utc(row.confirmed_at) if row.confirmed_at else None,
-                )
-                for row in rows
-            ]
+            rows = session.scalars(select(CheckInModel).where(
+                CheckInModel.profile_id == profile_id,
+            ).order_by(CheckInModel.created_at.desc()))
+            return [_check_in_record(row) for row in rows]
 
     def get_check_in(self, profile_id: str, check_in_id: str) -> CheckInRecord | None:
         with self.session_factory() as session:
-            row = session.scalar(
-                select(CheckInModel).where(
-                    CheckInModel.profile_id == profile_id,
-                    CheckInModel.id == check_in_id,
-                )
-            )
-            if row is None:
-                return None
-            return CheckInRecord(
-                id=row.id,
-                profile_id=row.profile_id,
-                text=row.text,
-                source=row.source,
-                created_at=_as_utc(row.created_at),
-                corrected_text=row.corrected_text,
-                text_revision=row.text_revision, facts_revision=row.facts_revision,
-                    confirmed_revision=row.confirmed_revision,
-                confirmed_at=_as_utc(row.confirmed_at) if row.confirmed_at else None,
-            )
+            row = session.scalar(select(CheckInModel).where(
+                CheckInModel.profile_id == profile_id, CheckInModel.id == check_in_id,
+            ))
+            return _check_in_record(row) if row is not None else None
+
+    def _check_in_snapshots(self, profile_id: str, check_in_id: str | None = None):
+        # One SQL statement reads revision metadata and facts from the same snapshot.
+        query = select(CheckInModel, SymptomFactModel).outerjoin(SymptomFactModel, and_(
+            SymptomFactModel.check_in_id == CheckInModel.id,
+            SymptomFactModel.text_revision == CheckInModel.text_revision,
+            CheckInModel.confirmed_revision == CheckInModel.text_revision,
+            SymptomFactModel.confirmed.is_(True),
+        )).where(CheckInModel.profile_id == profile_id).order_by(
+            CheckInModel.created_at.desc(), CheckInModel.id, SymptomFactModel.id,
+        )
+        if check_in_id is not None:
+            query = query.where(CheckInModel.id == check_in_id)
+        with self.session_factory() as session:
+            snapshots = {}
+            for row, fact in session.execute(query):
+                if row.id not in snapshots:
+                    snapshots[row.id] = (_check_in_record(row), [])
+                if fact is not None:
+                    snapshots[row.id][1].append(_fact_record(fact, row))
+            return list(snapshots.values())
+
+    def get_check_in_snapshot(self, profile_id: str, check_in_id: str):
+        snapshots = self._check_in_snapshots(profile_id, check_in_id)
+        return snapshots[0] if snapshots else None
+
+    def list_check_in_snapshots(self, profile_id: str):
+        return self._check_in_snapshots(profile_id)
 
     def update_check_in_text(
         self, profile_id: str, check_in_id: str, corrected_text: str, *, expected_revision: int,
@@ -219,8 +240,8 @@ class DatabaseStore:
     def confirm_check_in(
         self, profile_id: str, check_in_id: str, *, corrected_text: str | None,
         facts: list[SymptomFact], expected_revision: int,
-    ) -> list[SymptomFact]:
-        with self.session_factory() as session:
+    ) -> ConfirmationResult:
+        with self.session_factory.begin() as session:
             if self.engine.dialect.name == "sqlite":
                 # SQLite has no SELECT FOR UPDATE. Reserve its writer before
                 # reading the fact set so concurrent confirmations serialize.
@@ -241,7 +262,7 @@ class DatabaseStore:
             ).order_by(SymptomFactModel.id)).all()
             current = [_fact_record(fact, row) for fact in current_rows]
             if row.confirmed_revision == expected_revision and fact_content(current) == fact_content(facts):
-                return current
+                return self._confirmation_result(session, _check_in_record(row), tuple(current))
             facts_revision = row.facts_revision + 1
             now = datetime.now(timezone.utc)
             result = session.execute(update(CheckInModel).where(
@@ -266,56 +287,68 @@ class DatabaseStore:
                     confidence=fact.confidence, confirmed=True,
                     text_revision=expected_revision, created_at=now,
                 ))
-            session.commit()
-        return sorted(saved, key=lambda fact: fact.id)
+            record = _check_in_record(row)
+            return self._confirmation_result(session, record, tuple(sorted(saved, key=lambda fact: fact.id)))
+
+    def _confirmation_result(
+        self, session: Session, record: CheckInRecord, facts: tuple[SymptomFact, ...],
+    ) -> ConfirmationResult:
+        event = confirmation_safety_event(record, facts)
+        saved = self._write_monitoring_event(session, record.profile_id, event) if event else None
+        return ConfirmationResult(record, facts, saved)
 
     def list_symptom_facts(self, check_in_id: str) -> list[SymptomFact]:
         with self.session_factory() as session:
-            rows = session.scalars(select(SymptomFactModel).join(CheckInModel).where(
+            rows = session.execute(select(SymptomFactModel, CheckInModel).join(CheckInModel).where(
                 SymptomFactModel.check_in_id == check_in_id,
                 SymptomFactModel.confirmed.is_(True),
                 CheckInModel.confirmed_revision == CheckInModel.text_revision,
                 SymptomFactModel.text_revision == CheckInModel.text_revision,
             ).order_by(SymptomFactModel.id)).all()
-            return [_fact_record(row, row.check_in) for row in rows]
+            return [_fact_record(fact, check_in) for fact, check_in in rows]
 
     def save_monitoring_event(self, profile_id: str, event: MonitoringEvent) -> MonitoringEventRecord:
+        with self.session_factory.begin() as session:
+            self._sqlite_write_lock(session)
+            return self._write_monitoring_event(session, profile_id, event)
+
+    def _write_monitoring_event(
+        self, session: Session, profile_id: str, event: MonitoringEvent,
+    ) -> MonitoringEventRecord:
         key = event_identity(profile_id, event)
         now = datetime.now(timezone.utc)
         event_id = f"event-{uuid4().hex}"
-        with self.session_factory() as session:
-            row = MonitoringEventModel(
-                id=event_id, profile_id=profile_id, identity_key=key,
-                status=event.status.value, level=event.level,
-                metric=event.metric.value if event.metric else None, z_score=event.z_score,
-                message=event.message, evidence_json=list(event.evidence),
-                source_observation_ids=list(event.source_observation_ids),
-                period_start=event.period_start, period_end=event.period_end,
-                ruleset_version=event.algorithm_version, analysis_details=event.analysis_details,
-                text_provenance=list(event.text_provenance), created_at=now,
-            )
-            try:
+        row = MonitoringEventModel(
+            id=event_id, profile_id=profile_id, identity_key=key,
+            status=event.status.value, level=event.level,
+            metric=event.metric.value if event.metric else None, z_score=event.z_score,
+            message=event.message, evidence_json=list(event.evidence),
+            source_observation_ids=list(event.source_observation_ids),
+            period_start=event.period_start, period_end=event.period_end,
+            ruleset_version=event.algorithm_version, analysis_details=event.analysis_details,
+            text_provenance=list(event.text_provenance), created_at=now,
+        )
+        try:
+            # A savepoint isolates a duplicate-key failure while preserving the
+            # outer transaction of a confirmation.
+            with session.begin_nested():
                 session.add(row)
-                # The UNIQUE index arbitrates concurrent requests, including
-                # separate processes/repository instances. Losers create no notifications.
                 session.flush()
-                if event.status.value in {"attention", "insufficient_data", "safety"}:
-                    for recipient_id in ("demo-user", "demo-caregiver"):
-                        session.add(NotificationModel(
-                            id=f"notification-{uuid4().hex}", event_id=event_id,
-                            recipient_id=recipient_id, status="unread", read_at=None, created_at=now,
-                        ))
-                session.commit()
-                return _event_record(row)
-            except IntegrityError:
-                session.rollback()
-                existing = session.scalar(select(MonitoringEventModel).where(
-                    MonitoringEventModel.profile_id == profile_id,
-                    MonitoringEventModel.identity_key == key,
+        except IntegrityError:
+            existing = session.scalar(select(MonitoringEventModel).where(
+                MonitoringEventModel.profile_id == profile_id,
+                MonitoringEventModel.identity_key == key,
+            ))
+            if existing is None:
+                raise
+            return _event_record(existing)
+        if event.status.value in {"attention", "insufficient_data", "safety"}:
+            for recipient_id in ("demo-user", "demo-caregiver"):
+                session.add(NotificationModel(
+                    id=f"notification-{uuid4().hex}", event_id=event_id,
+                    recipient_id=recipient_id, status="unread", read_at=None, created_at=now,
                 ))
-                if existing is None:
-                    raise  # Preserve unrelated constraint errors.
-                return _event_record(existing)
+        return _event_record(row)
 
     def list_monitoring_events(self, profile_id: str) -> list[MonitoringEventRecord]:
         with self.session_factory() as session:
@@ -370,21 +403,62 @@ class DatabaseStore:
                 created_at=_as_utc(row.created_at),
             )
 
-    def reset_demo_profile(self, profile_id: str) -> None:
-        from sqlalchemy import delete
+    def _sqlite_write_lock(self, session: Session) -> None:
+        if self.engine.dialect.name == "sqlite":
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
 
-        with self.session_factory() as session:
-            event_ids = session.scalars(
-                select(MonitoringEventModel.id).where(MonitoringEventModel.profile_id == profile_id)
-            ).all()
-            check_in_ids = session.scalars(
-                select(CheckInModel.id).where(CheckInModel.profile_id == profile_id)
-            ).all()
-            if event_ids:
-                session.execute(delete(NotificationModel).where(NotificationModel.event_id.in_(event_ids)))
-                session.execute(delete(MonitoringEventModel).where(MonitoringEventModel.id.in_(event_ids)))
-            if check_in_ids:
-                session.execute(delete(SymptomFactModel).where(SymptomFactModel.check_in_id.in_(check_in_ids)))
-                session.execute(delete(CheckInModel).where(CheckInModel.id.in_(check_in_ids)))
-            session.execute(delete(ObservationModel).where(ObservationModel.profile_id == profile_id))
-            session.commit()
+    def _lock_demo_profile(self, session: Session, profile_id: str) -> None:
+        self._sqlite_write_lock(session)
+        session.execute(select(ProfileModel.id).where(
+            ProfileModel.id == profile_id,
+        ).with_for_update(key_share=True))
+
+    def _remove_check_ins(self, session, check_in_ids):
+        if check_in_ids:
+            session.execute(delete(SymptomFactModel).where(SymptomFactModel.check_in_id.in_(check_in_ids)))
+            session.execute(delete(CheckInModel).where(CheckInModel.id.in_(check_in_ids)))
+
+    def _reset_demo_profile(self, session: Session, profile_id: str) -> None:
+        check_in_ids = session.scalars(select(CheckInModel.id).where(
+            CheckInModel.profile_id == profile_id,
+        ).with_for_update()).all()
+        event_ids = session.scalars(select(MonitoringEventModel.id).where(
+            MonitoringEventModel.profile_id == profile_id,
+        )).all()
+        if event_ids:
+            session.execute(delete(NotificationModel).where(NotificationModel.event_id.in_(event_ids)))
+            session.execute(delete(MonitoringEventModel).where(MonitoringEventModel.id.in_(event_ids)))
+        self._remove_check_ins(session, check_in_ids)
+        session.execute(delete(ObservationModel).where(ObservationModel.profile_id == profile_id))
+
+    def replace_demo_scenario(
+        self, profile_id: str, observations: tuple[Observation, ...],
+        check_ins: tuple[CheckInRecord, ...], *, reset: bool,
+    ) -> None:
+        with self.session_factory.begin() as session:
+            self._lock_demo_profile(session, profile_id)
+            if reset:
+                self._reset_demo_profile(session, profile_id)
+            observation_ids = {item.id for item in observations}
+            check_in_ids = {item.id for item in check_ins}
+            existing_observations = set(session.scalars(select(ObservationModel.id).where(
+                ObservationModel.profile_id == profile_id,
+                ObservationModel.source == "simulator",
+                ObservationModel.id.like("demo-%"),
+            )))
+            existing_check_ins = set(session.scalars(select(CheckInModel.id).where(
+                CheckInModel.profile_id == profile_id,
+                CheckInModel.source == "simulator",
+                CheckInModel.id.like("demo-%"),
+            ).with_for_update()))
+            obsolete_observations = existing_observations - observation_ids
+            if obsolete_observations:
+                session.execute(delete(ObservationModel).where(ObservationModel.id.in_(obsolete_observations)))
+            self._remove_check_ins(session, existing_check_ins - check_in_ids)
+            session.add_all(_observation_row(item) for item in observations if item.id not in existing_observations)
+            session.add_all(_check_in_row(item) for item in check_ins if item.id not in existing_check_ins)
+
+    def reset_demo_profile(self, profile_id: str) -> None:
+        with self.session_factory.begin() as session:
+            self._lock_demo_profile(session, profile_id)
+            self._reset_demo_profile(session, profile_id)

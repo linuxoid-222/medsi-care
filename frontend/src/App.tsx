@@ -113,6 +113,7 @@ export function App() {
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [transcriptSaveStatus, setTranscriptSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const transcriptSaveRef = useRef<Transcript | null>(null);
+  const transcriptAttemptRef = useRef<{ transcript: Transcript; key: string } | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -254,7 +255,7 @@ export function App() {
     await loadObservations();
   }
 
-  async function saveCheckIn(valueToSave: string): Promise<CheckIn | null> {
+  async function saveCheckIn(valueToSave: string, attemptKey?: string): Promise<CheckIn | null> {
     setError("");
     if (!valueToSave.trim()) {
       setError("Текст записи не должен быть пустым");
@@ -262,7 +263,10 @@ export function App() {
     }
     const response = await apiFetch(`/api/v1/profiles/${profileId}/check-ins`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(attemptKey ? { "Idempotency-Key": attemptKey } : {}),
+      },
       body: JSON.stringify({ text: valueToSave }),
     });
     if (!response.ok) {
@@ -277,7 +281,7 @@ export function App() {
     setManualEvidence("");
     setActiveCheckIn(saved);
     setFactText(saved.corrected_text ?? saved.text);
-    setFacts([]);
+    setFacts(saved.facts);
     setSafetyMessage("");
     setExtractionFallback(false);
     return saved;
@@ -453,16 +457,21 @@ export function App() {
     }
     setTranscript(await response.json());
     transcriptSaveRef.current = null;
+    transcriptAttemptRef.current = null;
     setTranscriptSaveStatus("idle");
   }
 
   async function saveTranscript() {
     if (!transcript || transcriptSaveRef.current === transcript) return;
+    if (transcriptAttemptRef.current?.transcript !== transcript) {
+      transcriptAttemptRef.current = { transcript, key: crypto.randomUUID() };
+    }
+    const attemptKey = transcriptAttemptRef.current.key;
     transcriptSaveRef.current = transcript;
     setTranscriptSaveStatus("saving");
     let saved = false;
     try {
-      saved = Boolean(await saveCheckIn(transcript.text));
+      saved = Boolean(await saveCheckIn(transcript.text, attemptKey));
     } catch {
       if (transcriptSaveRef.current === transcript) {
         setError("Не удалось сохранить транскрипт. Проверьте связь и повторите попытку.");

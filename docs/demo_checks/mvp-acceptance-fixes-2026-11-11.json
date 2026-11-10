@@ -1,0 +1,84 @@
+{
+  "checked_at_utc": "2026-11-10T23:59:21.003110+00:00",
+  "base_commit": "0233065bbf7bdca1f8fc272383256cfbfac32c4d",
+  "tested_tree": "working tree on base_commit identified by source hashes",
+  "source_sha256": {
+    "backend/alembic/versions/0008_check_in_attempt.py": "6f46eb23c46ce8aeb31d195215fd6a8e264f76cd14fbba3b99db15c1b77cb9c7",
+    "backend/app/db/models.py": "d3da04d8596bd9635def52d63d5f9b3d0cbcedf39ed67a9ad66bac8560e7f79d",
+    "backend/app/db/repository.py": "99d6026ce3379187489db84a1f127bd0ddff30a78cbf23b1425064ae7d3d4974",
+    "backend/app/main.py": "0538cd72ea9b1af1073b43ba6a1b0b5243c71a593b25bf823ebac94e35feb586",
+    "backend/app/store.py": "f2272647f86ead976c91a01203e5555d25339efb8893bef9a1d2d2ef60479fbd",
+    "backend/tests/test_database_repository.py": "5a42527eb83912b32b33144976fdd2c5b92c73a38395eb9d358e1ae254705b01",
+    "backend/tests/test_mvp_acceptance_regressions.py": "3529c505edcaa092432bf5e2a8b6c604744f2fa24918c24384a48d4e659b672b",
+    "frontend/src/App.tsx": "317a37682b00c9befbd3ee37fd4e32e1d59f4e21279cbd62da23891d7f77737f",
+    "frontend/tests/transcript-save.test.mjs": "eb7e2ac9ebb5f8b2df67d8431abccc20d775d364f3dfb0c00ef27d5a70d6f267"
+  },
+  "input_review": "docs/reviews/acceptance-2026-11-11-mvp-0233065.md",
+  "environment": {
+    "postgresql": "18.6",
+    "data": "synthetic",
+    "separate_databases": 3,
+    "user_stand_reset": false,
+    "test_databases_cleaned_up": true
+  },
+  "before_fix": {
+    "command": ".venv/bin/pytest -q backend/tests/test_mvp_acceptance_regressions.py -k postgres",
+    "result": "3 failed, 6 deselected",
+    "N1": {
+      "check_ins": 2,
+      "different_ids": true,
+      "failure_injected": "after PostgreSQL commit, before HTTP serialization"
+    },
+    "N2": {
+      "observations": 126,
+      "check_ins": 42,
+      "status": "no_change",
+      "baseline": {
+        "sleep_hours": 7.25,
+        "activity_minutes": 55,
+        "pulse_bpm": 75
+      }
+    },
+    "N3": {
+      "A_top_level_facts_revision": 2,
+      "A_fact_revision": 1,
+      "B_facts_revision": 2
+    }
+  },
+  "after_fix": {
+    "N1": "same UUID and normalized payload returns original ID; PostgreSQL unique index; 409 for mismatched content; retry after pre-commit failure; independent same-text intent supported",
+    "N2": "atomic replacement of generator-owned observations/check-ins and dependent facts; manual records and historical events preserved; same parameters keep rows; D and D+1 each yield attention with 63 demo observations",
+    "N3": "row lock serializes revisions; response is own commit snapshot; current GET joins facts and metadata; safety event and notifications commit together; rollback tested",
+    "frontend": "15 passed and production build passed; existing chunk size warning",
+    "backend": "200 passed, 5 skipped (SQL-only memory variants), PostgreSQL cases ran",
+    "migrations": "clean upgrade to 0008 and 0007→0008 with legacy check-in; alembic check passed for both",
+    "legacy_row_after_upgrade": {
+      "id": "legacy-check",
+      "facts_revision": 1,
+      "confirmed_revision": 1,
+      "creation_key": null
+    },
+    "demo_monitoring_safety_reset_smoke": "passed in PostgreSQL HTTP and repository tests",
+    "research_v2": "verify_report and all 9 archive SHA256 checks passed",
+    "compileall": "passed",
+    "git_diff_check": "passed"
+  },
+  "browser_retry": {
+    "browser": "155.0.8059.84",
+    "first_backend_status": 201,
+    "browser_response": "connectionreset",
+    "retry_backend_status": 201,
+    "same_key": true,
+    "original_id": "checkin-39f2a7f7b6f94d9f9185cfbb3999c085",
+    "check_ins": 1,
+    "events": 0,
+    "audio": "Chromium synthetic WAV microphone input with real faster-whisper"
+  },
+  "browser_method": "Playwright route.fetch forwarded first POST to FastAPI/PostgreSQL and read the actual 201. route.abort(connectionreset) discarded delivery to Chromium. User action simulated by a second button click. PostgreSQL row count also checked directly (1, keyed rows 1).",
+  "remaining": [
+    "The attempt key and transcript are kept in the active UI session; a reload discards the local draft.",
+    "Reset explicitly removes the record and its creation key. Existing rows receive no retroactive keys.",
+    "Historical events can reference replaced demo source IDs via their saved snapshots.",
+    "F7 requires repeat independent acceptance."
+  ]
+}

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
@@ -15,6 +16,9 @@ function createHandler(saveCheckIn, statuses) {
   return vm.runInNewContext(script, {
     transcript: { text: "Сегодня чувствую слабость" },
     transcriptSaveRef: { current: null },
+    transcriptAttemptRef: { current: null },
+    crypto: { randomUUID },
+    setError: () => {},
     setTranscriptSaveStatus: (status) => statuses.push(status),
     saveCheckIn,
   });
@@ -49,5 +53,26 @@ test("a failed save permits a retry", async () => {
   await save();
   await save();
   assert.equal(requests, 2);
+  assert.deepEqual(statuses, ["saving", "idle", "saving", "saved"]);
+});
+
+
+test("retry after a committed save loses its response reuses the attempt key", async () => {
+  const records = new Map();
+  const attempts = [];
+  const statuses = [];
+  const save = createHandler(async (text, key) => {
+    assert.match(key, /^[a-f0-9-]{36}$/);
+    attempts.push(key);
+    if (!records.has(key)) {
+      records.set(key, { id: "committed-check-in", text });
+      throw new TypeError("synthetic response loss");
+    }
+    return records.get(key);
+  }, statuses);
+  await save();
+  await save();
+  assert.deepEqual(attempts, [attempts[0], attempts[0]]);
+  assert.equal(records.size, 1);
   assert.deepEqual(statuses, ["saving", "idle", "saving", "saved"]);
 });

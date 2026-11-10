@@ -40,6 +40,9 @@ class ObservationModel(Base):
 
 class CheckInModel(Base):
     __tablename__ = "check_ins"
+    __table_args__ = (Index("uq_check_ins_creation_key", "profile_id", "creation_key", unique=True),)
+
+    creation_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     profile_id: Mapped[str] = mapped_column(

@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from uuid import uuid4
+from typing import Annotated
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
 from app.auth import CurrentUser, authenticate, issue_token, require_profile_access
@@ -34,7 +35,6 @@ from app.domain.monitoring import (
     Metric,
     Observation,
     MonitoringEvent,
-    MonitoringStatus,
     analyze_metrics,
     aggregate_daily,
     baseline_details,
@@ -42,8 +42,7 @@ from app.domain.monitoring import (
     expected_unit,
     validate_pressure_pair,
 )
-from app.facts import (MONITORING_RULE_VERSION, TextRevisionConflict, fact_provenance, select_current_facts)
-from app.safety import evaluate_safety
+from app.facts import (MONITORING_RULE_VERSION, TextRevisionConflict, select_current_facts)
 from app.schemas import (
     AnalysisResponse,
     CaregiverSummaryResponse,
@@ -66,7 +65,7 @@ from app.schemas import (
     TrendPointResponse,
     UserResponse,
 )
-from app.store import CheckInRecord, build_store
+from app.store import CheckInCreationConflict, CheckInRecord, build_store
 
 
 PROFILE_ID = "profile-demo"
@@ -174,16 +173,9 @@ def load_demo_scenario(payload: DemoLoadRequest, user: CurrentUser) -> DemoLoadR
         raise HTTPException(status_code=422, detail="Недопустимая опорная дата.") from exc
     if any(item.measured_at > now for item in scenario.observations):
         raise HTTPException(status_code=422, detail="Сценарий содержит будущие измерения.")
-    if payload.reset:
-        store.reset_demo_profile(user.profile_id)
-    existing_observations = {item.id for item in store.list_observations(user.profile_id)}
-    existing_check_ins = {item.id for item in store.list_check_ins(user.profile_id)}
-    for observation in scenario.observations:
-        if observation.id not in existing_observations:
-            store.add_observation(observation)
-    for check_in in scenario.check_ins:
-        if check_in.id not in existing_check_ins:
-            store.add_check_in(check_in)
+    store.replace_demo_scenario(
+        user.profile_id, scenario.observations, scenario.check_ins, reset=payload.reset,
+    )
     return DemoLoadResponse(
         status="loaded",
         synthetic=True,
@@ -292,22 +284,29 @@ def list_observations(profile_id: str, user: CurrentUser) -> list[Observation]:
     response_model=CheckInResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_check_in(profile_id: str, payload: CheckInCreate, user: CurrentUser) -> CheckInResponse:
+def create_check_in(
+    profile_id: str, payload: CheckInCreate, user: CurrentUser,
+    idempotency_key: Annotated[UUID | None, Header()] = None,
+) -> CheckInResponse:
     _require_profile(profile_id)
     require_profile_access(profile_id, user, write=True)
-    record = store.add_check_in(
-        CheckInRecord(
-            id=f"checkin-{uuid4().hex}",
-            profile_id=profile_id,
-            text=payload.text,
-            source=payload.source,
-            created_at=datetime.now(timezone.utc),
-        )
-    )
+    try:
+        record = store.add_check_in(CheckInRecord(
+            id=f"checkin-{uuid4().hex}", profile_id=profile_id,
+            text=payload.text, source=payload.source, created_at=datetime.now(timezone.utc),
+            creation_key=str(idempotency_key) if idempotency_key is not None else None,
+        ))
+    except CheckInCreationConflict as exc:
+        raise HTTPException(status_code=409, detail="Ключ сохранения уже использован для другого текста.") from exc
     return _check_in_response(record)
 
 
-def _check_in_response(record) -> CheckInResponse:
+def _check_in_response(record, facts=None) -> CheckInResponse:
+    if facts is None:
+        snapshot = store.get_check_in_snapshot(record.profile_id, record.id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Check-in not found")
+        record, facts = snapshot
     return CheckInResponse(
         id=record.id, profile_id=record.profile_id, text=record.text,
         corrected_text=record.corrected_text, source=record.source, created_at=record.created_at,
@@ -315,7 +314,7 @@ def _check_in_response(record) -> CheckInResponse:
         confirmed_revision=record.confirmed_revision,
         confirmed_at=record.confirmed_at,
         status="confirmed" if record.is_confirmed else "awaiting_analysis",
-        facts=[_fact_response(fact) for fact in store.list_symptom_facts(record.id)],
+        facts=[_fact_response(fact) for fact in facts],
     )
 
 
@@ -327,17 +326,17 @@ def _revision_conflict() -> HTTPException:
 def list_check_ins(profile_id: str, user: CurrentUser) -> list[CheckInResponse]:
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
-    return [_check_in_response(item) for item in store.list_check_ins(profile_id)]
+    return [_check_in_response(record, facts) for record, facts in store.list_check_in_snapshots(profile_id)]
 
 
 @app.get("/api/v1/profiles/{profile_id}/check-ins/{check_in_id}", response_model=CheckInResponse)
 def get_check_in(profile_id: str, check_in_id: str, user: CurrentUser) -> CheckInResponse:
     _require_profile(profile_id)
     require_profile_access(profile_id, user)
-    record = store.get_check_in(profile_id, check_in_id)
-    if record is None:
+    snapshot = store.get_check_in_snapshot(profile_id, check_in_id)
+    if snapshot is None:
         raise HTTPException(status_code=404, detail="Check-in not found")
-    return _check_in_response(record)
+    return _check_in_response(*snapshot)
 
 
 @app.patch("/api/v1/profiles/{profile_id}/check-ins/{check_in_id}", response_model=CheckInResponse)
@@ -475,41 +474,22 @@ def confirm_check_in_facts(
             detail="Fact evidence must be present in the confirmed text",
         ) from exc
     try:
-        facts = store.confirm_check_in(
+        result = store.confirm_check_in(
             profile_id, check_in_id, corrected_text=payload.corrected_text,
             facts=facts, expected_revision=payload.text_revision,
         )
     except TextRevisionConflict as exc:
         raise _revision_conflict() from exc
-    reviewed = store.get_check_in(profile_id, check_in_id)
-    if reviewed is None or not reviewed.is_confirmed or reviewed.text_revision != payload.text_revision:
-        raise _revision_conflict()
-    safety_decision = evaluate_safety(facts)
-    safety_event_response = None
-    if safety_decision is not None:
-        now = datetime.now(timezone.utc)
-        safety_event = MonitoringEvent(
-            status=MonitoringStatus.SAFETY,
-            metric=None,
-            z_score=None,
-            evidence=safety_decision.evidence,
-            message=safety_decision.message,
-            algorithm_version=safety_decision.rule_version,
-            level=safety_decision.level,
-            period_start=check_in.created_at,
-            period_end=now,
-            text_provenance=tuple(fact_provenance(fact, rule_version=safety_decision.rule_version,
-                                                 resolution="direct_confirmation") for fact in safety_decision.facts),
-        )
-        safety_event_response = _event_response(store.save_monitoring_event(profile_id, safety_event))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Check-in not found") from exc
     return CheckInConfirmResponse(
-        facts_revision=reviewed.facts_revision,
-        text_revision=payload.text_revision,
-        confirmed_at=reviewed.confirmed_at,
+        facts_revision=result.record.facts_revision,
+        text_revision=result.record.text_revision,
+        confirmed_at=result.record.confirmed_at,
         status="confirmed",
         check_in_id=check_in_id,
-        facts=[_fact_response(fact) for fact in facts],
-        safety_event=safety_event_response,
+        facts=[_fact_response(fact) for fact in result.facts],
+        safety_event=_event_response(result.safety_event) if result.safety_event else None,
     )
 
 

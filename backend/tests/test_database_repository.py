@@ -56,13 +56,14 @@ class DatabaseRepositoryTests(TestCase):
                     confidence=0.9,
                 )
             ]
-            saved_facts = store.confirm_check_in(
+            result = store.confirm_check_in(
                 "profile-demo",
                 check_in.id,
                 corrected_text=corrected.corrected_text,
                 expected_revision=corrected.text_revision,
                 facts=facts,
             )
+            saved_facts = list(result.facts)
             self.assertEqual(store.list_symptom_facts(check_in.id), saved_facts)
             self.assertEqual(saved_facts[0].category, facts[0].category)
             self.assertTrue(saved_facts[0].id)
