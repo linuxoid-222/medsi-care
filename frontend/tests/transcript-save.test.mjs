@@ -12,13 +12,13 @@ const script = ts.transpileModule(handler + "\nsaveTranscript", {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function createHandler(saveCheckIn, statuses) {
+function createHandler(saveCheckIn, statuses, errors = []) {
   return vm.runInNewContext(script, {
     transcript: { text: "Сегодня чувствую слабость" },
     transcriptSaveRef: { current: null },
     transcriptAttemptRef: { current: null },
     crypto: { randomUUID },
-    setError: () => {},
+    setError: (error) => errors.push(error),
     setTranscriptSaveStatus: (status) => statuses.push(status),
     saveCheckIn,
   });
@@ -46,14 +46,16 @@ test("one transcript is saved once across concurrent and subsequent clicks", asy
 test("a failed save permits a retry", async () => {
   let requests = 0;
   const statuses = [];
+  const errors = [];
   const save = createHandler(async () => {
     requests += 1;
     return requests === 1 ? null : { id: "synthetic-check-in" };
-  }, statuses);
+  }, statuses, errors);
   await save();
   await save();
   assert.equal(requests, 2);
   assert.deepEqual(statuses, ["saving", "idle", "saving", "saved"]);
+  assert.deepEqual(errors, []);
 });
 
 
@@ -61,6 +63,7 @@ test("retry after a committed save loses its response reuses the attempt key", a
   const records = new Map();
   const attempts = [];
   const statuses = [];
+  const errors = [];
   const save = createHandler(async (text, key) => {
     assert.match(key, /^[a-f0-9-]{36}$/);
     attempts.push(key);
@@ -69,10 +72,15 @@ test("retry after a committed save loses its response reuses the attempt key", a
       throw new TypeError("synthetic response loss");
     }
     return records.get(key);
-  }, statuses);
+  }, statuses, errors);
   await save();
   await save();
   assert.deepEqual(attempts, [attempts[0], attempts[0]]);
   assert.equal(records.size, 1);
   assert.deepEqual(statuses, ["saving", "idle", "saving", "saved"]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /Сервер мог уже сохранить запись/);
+  assert.match(errors[0], /безопасно повторить ту же попытку/);
+  assert.match(errors[0], /Перезагрузка страницы удалит текущий черновик/);
+  assert.match(errors[0], /Открыть последнюю запись/);
 });

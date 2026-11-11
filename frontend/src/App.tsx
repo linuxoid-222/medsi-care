@@ -474,7 +474,12 @@ export function App() {
       saved = Boolean(await saveCheckIn(transcript.text, attemptKey));
     } catch {
       if (transcriptSaveRef.current === transcript) {
-        setError("Не удалось сохранить транскрипт. Проверьте связь и повторите попытку.");
+        setError(
+          "Ответ о сохранении не получен. Сервер мог уже сохранить запись. " +
+          "Нажмите «Сохранить транскрипт» ещё раз, чтобы безопасно повторить ту же попытку. " +
+          "Перезагрузка страницы удалит текущий черновик. После перезагрузки сохранённую запись " +
+          "можно найти через «Открыть последнюю запись».",
+        );
       }
     }
     if (transcriptSaveRef.current !== transcript) return;
